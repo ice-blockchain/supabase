@@ -10,6 +10,7 @@ import { ShimmeringLoader } from 'ui-patterns/ShimmeringLoader'
 import ChangePaymentMethodModal from './ChangePaymentMethodModal'
 import CreditCard from './CreditCard'
 import DeletePaymentMethodModal from './DeletePaymentMethodModal'
+import { StripePaymentConnection } from './StripePaymentConnection'
 import AddNewPaymentMethodModal from '@/components/interfaces/Billing/Payment/AddNewPaymentMethodModal'
 import { SupportLink } from '@/components/interfaces/Support/SupportLink'
 import {
@@ -61,13 +62,19 @@ const PaymentMethods = () => {
           <div className="sticky space-y-2 top-12">
             <p className="text-foreground text-base m-0">Payment Methods</p>
             <p className="text-sm text-foreground-light mb-2 pr-4 m-0">
-              Payments for your subscription are made using the default card.
+              {selectedOrganization?.managed_by === MANAGED_BY.STRIPE_PROJECTS
+                ? 'Billing for this organisation is handled through a connected Stripe payment token.'
+                : 'Payments for your subscription are made using the default card.'}
             </p>
           </div>
         </ScaffoldSectionDetail>
         <ScaffoldSectionContent>
-          {selectedOrganization?.managed_by !== undefined &&
-          selectedOrganization?.managed_by !== MANAGED_BY.SUPABASE ? (
+          {selectedOrganization?.managed_by === MANAGED_BY.STRIPE_PROJECTS ? (
+            <StripePaymentConnection
+              status="connected" // TODO: derive from token status once API-917 lands
+            />
+          ) : selectedOrganization?.managed_by !== undefined &&
+            selectedOrganization?.managed_by !== MANAGED_BY.SUPABASE ? (
             <PartnerManagedResource
               managedBy={selectedOrganization?.managed_by}
               resource="Payment Methods"
