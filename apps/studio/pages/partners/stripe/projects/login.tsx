@@ -1,15 +1,26 @@
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'common'
-import { AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { CheckCircle2 } from 'lucide-react'
 import { useRouter } from 'next/router'
 import { useEffect, useState } from 'react'
-import { Button, LogoLoader } from 'ui'
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+  LogoLoader,
+} from 'ui'
+import { Admonition } from 'ui-patterns'
 
 import {
   InterstitialLayout,
   LogoPair,
-  SupabaseSymbol,
+  PartnerLogo,
+  SupabaseLogo,
 } from '@/components/layouts/InterstitialLayout'
+import { ProfileImage } from '@/components/ui/ProfileImage'
 import { useConfirmAccountRequestMutation } from '@/data/partners/stripe-projects-confirm-mutation'
 import { accountRequestQueryOptions } from '@/data/partners/stripe-projects-query'
 import { withAuth } from '@/hooks/misc/withAuth'
@@ -17,14 +28,6 @@ import { useSignOut } from '@/lib/auth'
 import { BASE_PATH } from '@/lib/constants'
 import { useProfileNameAndPicture } from '@/lib/profile'
 import type { NextPageWithLayout } from '@/types'
-
-const StripeIcon = () => (
-  <img
-    src={`${BASE_PATH}/img/icons/stripe-icon.svg`}
-    alt="Stripe"
-    className="size-7"
-  />
-)
 
 // ---------------------------------------------------------------------------
 // Mock data — design review only
@@ -73,7 +76,7 @@ const StripeProjectsLoginPage: NextPageWithLayout = () => {
   const { ar_id } = useParams()
 
   const signOut = useSignOut()
-  const { username, primaryEmail } = useProfileNameAndPicture()
+  const { username, primaryEmail, avatarUrl } = useProfileNameAndPicture()
 
   const mockParam = router.query.mock as MockState | undefined
   const isMockMode = !!mockParam && mockParam in MOCK_RESPONSES
@@ -135,26 +138,45 @@ const StripeProjectsLoginPage: NextPageWithLayout = () => {
   const emailMatches = effectiveAccountRequest?.email_matches ?? false
 
   const displayName = username ?? primaryEmail ?? ''
-  const initial = displayName.charAt(0).toUpperCase()
+  const showSuccessBranch = effectiveIsSuccess && !effectiveIsConfirmed
 
   return (
     <>
       {isMockMode && (
-        <div className="fixed right-3 top-3 z-50 rounded border border-dashed border-warning bg-warning/10 px-2 py-1 font-mono text-xs text-warning-600">
-          mock: {mockParam}
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button type="warning" size="tiny" className="fixed right-3 top-3 z-50 font-mono">
+              mock: {mockParam}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-[180px]">
+            <DropdownMenuRadioGroup
+              value={mockParam}
+              onValueChange={(value) => {
+                router.replace(
+                  { pathname: router.pathname, query: { ...router.query, mock: value } },
+                  undefined,
+                  { shallow: true }
+                )
+                setMockConfirming(false)
+                setMockConfirmed(false)
+              }}
+            >
+              {Object.keys(MOCK_RESPONSES).map((state) => (
+                <DropdownMenuRadioItem key={state} value={state} className="font-mono text-xs">
+                  {state}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
       )}
 
       <div className="px-6 pb-6">
         {/* Loading */}
-        {(effectiveIsPending || effectiveIsConfirming) && (
+        {effectiveIsPending && (
           <div className="flex flex-col items-center gap-3 py-4">
             <LogoLoader />
-            {effectiveIsConfirming && (
-              <p className="text-sm text-foreground-light">
-                {linkedOrg ? 'Completing authorization...' : 'Creating your organization...'}
-              </p>
-            )}
           </div>
         )}
 
@@ -162,8 +184,8 @@ const StripeProjectsLoginPage: NextPageWithLayout = () => {
         {effectiveIsConfirmed && (
           <div className="py-4 text-center">
             <div className="mb-4 flex justify-center">
-              <div className="flex size-14 items-center justify-center rounded-full bg-emerald-100">
-                <CheckCircle2 className="size-7 text-emerald-600" />
+              <div className="flex size-14 items-center justify-center rounded-full bg-brand-200">
+                <CheckCircle2 className="size-7 text-brand" />
               </div>
             </div>
             <p className="text-lg font-semibold text-foreground">Stripe connected</p>
@@ -172,19 +194,21 @@ const StripeProjectsLoginPage: NextPageWithLayout = () => {
         )}
 
         {/* Wrong account */}
-        {effectiveIsSuccess && !emailMatches && (
+        {showSuccessBranch && !emailMatches && (
           <div className="flex flex-col gap-3">
-            <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
-              <AlertTriangle className="mt-0.5 size-5 shrink-0 text-amber-600" />
-              <div>
-                <p className="text-sm font-medium text-amber-900">Wrong account</p>
-                <p className="mt-1 text-sm text-amber-700">
+            <Admonition
+              type="warning"
+              title="Wrong account"
+              description={
+                <>
                   Sign in as{' '}
-                  <span className="font-medium">{effectiveAccountRequest?.email}</span> to
-                  continue.
-                </p>
-              </div>
-            </div>
+                  <span className="font-medium text-foreground">
+                    {effectiveAccountRequest?.email}
+                  </span>{' '}
+                  to continue.
+                </>
+              }
+            />
             <Button type="default" block onClick={() => signOut()}>
               Sign out
             </Button>
@@ -192,18 +216,18 @@ const StripeProjectsLoginPage: NextPageWithLayout = () => {
         )}
 
         {/* Linked — org already connected */}
-        {effectiveIsSuccess && emailMatches && linkedOrg && (
+        {showSuccessBranch && emailMatches && linkedOrg && (
           <div className="flex flex-col gap-3">
-            <div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-              <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-emerald-600" />
-              <div>
-                <p className="text-sm font-medium text-emerald-900">Already connected</p>
-                <p className="mt-1 text-sm text-emerald-800">
-                  <span className="font-medium">{linkedOrg.name}</span> is linked to this Stripe
-                  account.
-                </p>
-              </div>
-            </div>
+            <Admonition
+              type="tip"
+              title="Already connected"
+              description={
+                <>
+                  <span className="font-medium text-foreground">{linkedOrg.name}</span> is linked to
+                  this Stripe account.
+                </>
+              }
+            />
             <Button type="primary" block loading={effectiveIsConfirming} onClick={handleApprove}>
               Continue to dashboard
             </Button>
@@ -214,13 +238,15 @@ const StripeProjectsLoginPage: NextPageWithLayout = () => {
         )}
 
         {/* Pending — new org will be created */}
-        {effectiveIsSuccess && emailMatches && !linkedOrg && (
+        {showSuccessBranch && emailMatches && !linkedOrg && (
           <div className="flex flex-col gap-3">
             {/* Signed-in-as row */}
             <div className="flex items-center gap-3 rounded-lg border border-muted p-3">
-              <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted">
-                <span className="text-sm font-medium text-foreground">{initial}</span>
-              </div>
+              <ProfileImage
+                src={avatarUrl}
+                alt={displayName}
+                className="size-9 flex-shrink-0 rounded-md"
+              />
               <div className="min-w-0 flex-1">
                 <p className="text-xs text-foreground-light">Signed in as</p>
                 <p className="truncate text-sm font-medium text-foreground">{displayName}</p>
@@ -258,7 +284,11 @@ const StripeProjectsLoginPage: NextPageWithLayout = () => {
         {/* Error */}
         {effectiveIsError && (
           <div className="flex flex-col gap-3">
-            <p className="text-sm text-foreground-light">{error?.message}</p>
+            <Admonition
+              type="danger"
+              title="Unable to load authorization"
+              description={error?.message}
+            />
             <Button type="default" block onClick={() => signOut()}>
               Sign out
             </Button>
@@ -271,9 +301,14 @@ const StripeProjectsLoginPage: NextPageWithLayout = () => {
 
 StripeProjectsLoginPage.getLayout = (page) => (
   <InterstitialLayout
-    logo={<LogoPair left={<StripeIcon />} right={<SupabaseSymbol className="size-7" />} />}
+    logo={
+      <LogoPair
+        left={<PartnerLogo src={`${BASE_PATH}/img/icons/stripe-icon.svg`} alt="Stripe" />}
+        right={<SupabaseLogo />}
+      />
+    }
     title="Stripe"
-    description="Connect a Supabase organization"
+    description="Wants to create a new Supabase organization"
   >
     {page}
   </InterstitialLayout>
