@@ -1,5 +1,9 @@
 import { OrganizationInvite } from '@/components/interfaces/OrganizationInvite/OrganizationInvite'
-import { InterstitialLayout, SupabaseLogo } from '@/components/layouts/InterstitialLayout'
+import {
+  InterstitialLayout,
+  LogoBox,
+  SupabaseSymbol,
+} from '@/components/layouts/InterstitialLayout'
 import type { NextPageWithLayout } from '@/types'
 
 const JoinOrganizationPage: NextPageWithLayout = () => {
@@ -8,7 +12,11 @@ const JoinOrganizationPage: NextPageWithLayout = () => {
 
 JoinOrganizationPage.getLayout = (page) => (
   <InterstitialLayout
-    logo={<SupabaseLogo />}
+    logo={
+      <LogoBox>
+        <SupabaseSymbol className="size-7" />
+      </LogoBox>
+    }
     title="Organization Invitation"
     description="You have been invited to join an organization"
   >
