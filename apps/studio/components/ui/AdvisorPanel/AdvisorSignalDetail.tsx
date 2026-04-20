@@ -53,11 +53,6 @@ export const AdvisorSignalDetail = ({ item }: AdvisorSignalDetailProps) => {
     })
   }
 
-  const onDismissSignal = (key: string) => {
-    dismissSignal(key)
-    setSelectedItem(undefined)
-  }
-
   return (
     <div>
       <h3 className="text-sm mb-2">Entity</h3>
