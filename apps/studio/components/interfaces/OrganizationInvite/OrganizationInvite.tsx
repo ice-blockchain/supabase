@@ -6,11 +6,11 @@ import { Button, Separator } from 'ui'
 import { GenericSkeletonLoader } from 'ui-patterns'
 
 import { OrganizationInviteError } from './OrganizationInviteError'
+import { ProfileImage } from '@/components/ui/ProfileImage'
 import { useOrganizationAcceptInvitationMutation } from '@/data/organization-members/organization-invitation-accept-mutation'
 import { useOrganizationInvitationTokenQuery } from '@/data/organization-members/organization-invitation-token-query'
 import { useIsFeatureEnabled } from '@/hooks/misc/useIsFeatureEnabled'
 import { useProfile, useProfileNameAndPicture } from '@/lib/profile'
-import { ProfileImage } from '@/components/ui/ProfileImage'
 
 export const OrganizationInvite = () => {
   const router = useRouter()

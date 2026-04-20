@@ -79,10 +79,16 @@ const StripeProjectsLoginPage: NextPageWithLayout = () => {
   const { username, primaryEmail, avatarUrl } = useProfileNameAndPicture()
 
   const mockParam = router.query.mock as MockState | undefined
-  const isMockMode = !!mockParam && mockParam in MOCK_RESPONSES
+  const isMockMode =
+    process.env.NODE_ENV !== 'production' && !!mockParam && mockParam in MOCK_RESPONSES
 
   const [mockConfirming, setMockConfirming] = useState(false)
   const [mockConfirmed, setMockConfirmed] = useState(false)
+
+  useEffect(() => {
+    setMockConfirming(false)
+    setMockConfirmed(false)
+  }, [mockParam])
 
   const {
     data: accountRequest,
