@@ -14,6 +14,7 @@ import DowngradeModal from './DowngradeModal'
 import { EnterpriseCard } from './EnterpriseCard'
 import { ExitSurveyModal } from './ExitSurveyModal'
 import MembersExceedLimitModal from './MembersExceedLimitModal'
+import { StripeManagedPlanNotice } from './StripeManagedPlanNotice'
 import { SubscriptionPlanUpdateDialog } from './SubscriptionPlanUpdateDialog'
 import UpgradeSurveyModal from './UpgradeModal'
 import { getPlanChangeType } from '@/components/interfaces/Billing/Subscription/Subscription.utils'
@@ -21,6 +22,7 @@ import { ButtonTooltip } from '@/components/ui/ButtonTooltip'
 import PartnerManagedResource from '@/components/ui/PartnerManagedResource'
 import { RequestUpgradeToBillingOwners } from '@/components/ui/RequestUpgradeToBillingOwners'
 import { useFreeProjectLimitCheckQuery } from '@/data/organizations/free-project-limit-check-query'
+import { isPartnerBillingOrganization } from '@/data/organizations/managed-by-utils'
 import { useOrganizationBillingSubscriptionPreview } from '@/data/organizations/organization-billing-subscription-preview'
 import { useOrganizationQuery } from '@/data/organizations/organization-query'
 import type { CustomerAddress, CustomerTaxId } from '@/data/organizations/types'
@@ -55,6 +57,11 @@ export const PlanUpdateSidePanel = () => {
   const router = useRouter()
   const { slug } = useParams()
   const { data: selectedOrganization } = useSelectedOrganizationQuery()
+  const isPartnerBilledOrganization = isPartnerBillingOrganization(
+    selectedOrganization?.billing_partner
+  )
+  const isStripeManagedOrganization =
+    selectedOrganization?.managed_by === MANAGED_BY.STRIPE_PROJECTS
   const { mutate: sendEvent } = useSendEventMutation()
 
   const originalPlanRef = useRef<string>()
@@ -204,13 +211,16 @@ export const PlanUpdateSidePanel = () => {
           </div>
         }
       >
-        {selectedOrganization && selectedOrganization.managed_by !== MANAGED_BY.SUPABASE && (
-          <PartnerManagedResource
-            managedBy={selectedOrganization.managed_by}
-            resource="Organization plans"
-            cta={getPartnerManagedResourceCta(selectedOrganization)}
-          />
-        )}
+        {selectedOrganization &&
+          (isStripeManagedOrganization ? (
+            <StripeManagedPlanNotice />
+          ) : isPartnerBilledOrganization ? (
+            <PartnerManagedResource
+              managedBy={selectedOrganization.managed_by}
+              resource="Organization plans"
+              cta={getPartnerManagedResourceCta(selectedOrganization)}
+            />
+          ) : null)}
         <SidePanel.Content>
           <div className="py-6 grid grid-cols-12 gap-3">
             {subscriptionsPlans.map((plan) => {
@@ -282,8 +292,8 @@ export const PlanUpdateSidePanel = () => {
                           subscription?.plan?.id === 'enterprise' ||
                           subscription?.plan?.id === 'platform' ||
                           // Downgrades to free are still allowed through the dashboard given we have much better control about showing customers the impact + any possible issues with downgrading to free
-                          (selectedOrganization?.managed_by !== MANAGED_BY.SUPABASE &&
-                            plan.id !== 'tier_free') ||
+                          (isPartnerBilledOrganization && plan.id !== 'tier_free') ||
+                          isStripeManagedOrganization ||
                           // Orgs managed by AWS marketplace are not allowed to change the plan
                           selectedOrganization?.managed_by === MANAGED_BY.AWS_MARKETPLACE ||
                           hasOrioleProjects
@@ -309,9 +319,12 @@ export const PlanUpdateSidePanel = () => {
                                 ? 'Reach out to us via support to update your plan'
                                 : hasOrioleProjects
                                   ? 'Your organization has projects that are using the OrioleDB extension which is only available on the Free plan. Remove all OrioleDB projects before changing your plan.'
-                                  : selectedOrganization?.managed_by === MANAGED_BY.AWS_MARKETPLACE
-                                    ? 'You cannot change the plan for an organization managed by AWS Marketplace'
-                                    : undefined,
+                                  : isStripeManagedOrganization
+                                    ? 'You cannot change the plan for an organization managed through Stripe'
+                                    : selectedOrganization?.managed_by ===
+                                        MANAGED_BY.AWS_MARKETPLACE
+                                      ? 'You cannot change the plan for an organization managed by AWS Marketplace'
+                                      : undefined,
                           },
                         }}
                       >

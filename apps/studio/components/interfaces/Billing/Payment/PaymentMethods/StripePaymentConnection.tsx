@@ -7,9 +7,30 @@ import { MANAGED_BY } from '@/lib/constants/infrastructure'
 
 export type StripeTokenStatus = 'connected' | 'attention' | 'unknown'
 
-const STRIPE_DASHBOARD_URL = 'https://dashboard.stripe.com'
+export const STRIPE_DASHBOARD_URL = 'https://dashboard.stripe.com'
 
-export function StripePaymentConnection({ status = 'connected' }: { status?: StripeTokenStatus }) {
+interface StripePaymentConnectionProps {
+  status?: StripeTokenStatus
+  tokenLast4?: string | null
+  tokenExpMonth?: number | null
+  tokenExpYear?: number | null
+}
+
+const formatStripeTokenExpiry = (month?: number | null, year?: number | null) => {
+  if (!month || !year) return undefined
+  return `${String(month).padStart(2, '0')}/${year}`
+}
+
+export function StripePaymentConnection({
+  status = 'connected',
+  tokenLast4,
+  tokenExpMonth,
+  tokenExpYear,
+}: StripePaymentConnectionProps) {
+  const tokenExpiry = formatStripeTokenExpiry(tokenExpMonth, tokenExpYear)
+  const hasTokenSummary =
+    tokenLast4 !== null && tokenLast4 !== undefined && tokenExpiry !== undefined
+
   if (status === 'attention') {
     return (
       <Admonition
@@ -49,6 +70,11 @@ export function StripePaymentConnection({ status = 'connected' }: { status?: Str
         <p className="text-sm text-foreground-light max-w-sm text-balance">
           Billing for this organisation is handled via a connected Stripe payment token.
         </p>
+        {hasTokenSummary && (
+          <p className="text-xs text-foreground-light">
+            Token ending in {tokenLast4} expires {tokenExpiry}.
+          </p>
+        )}
       </div>
       <Button asChild type="default" iconRight={<ExternalLink size={14} />}>
         <a href={STRIPE_DASHBOARD_URL} target="_blank" rel="noopener noreferrer">

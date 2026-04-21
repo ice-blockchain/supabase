@@ -8,6 +8,7 @@ import { ShimmeringLoader } from 'ui-patterns/ShimmeringLoader'
 import { ProjectUpdateDisabledTooltip } from '../ProjectUpdateDisabledTooltip'
 import { Restriction } from '../Restriction'
 import { PlanUpdateSidePanel } from './PlanUpdateSidePanel'
+import { StripeManagedPlanNotice } from './StripeManagedPlanNotice'
 import { SupportLink } from '@/components/interfaces/Support/SupportLink'
 import {
   ScaffoldSection,
@@ -18,12 +19,15 @@ import AlertError from '@/components/ui/AlertError'
 import NoPermission from '@/components/ui/NoPermission'
 import { useOrgSubscriptionQuery } from '@/data/subscriptions/org-subscription-query'
 import { useAsyncCheckPermissions } from '@/hooks/misc/useCheckPermissions'
+import { useSelectedOrganizationQuery } from '@/hooks/misc/useSelectedOrganization'
+import { MANAGED_BY } from '@/lib/constants/infrastructure'
 import { useOrgSettingsPageStateSnapshot } from '@/state/organization-settings'
 
 const Subscription = () => {
   const { slug } = useParams()
   const snap = useOrgSettingsPageStateSnapshot()
   const projectUpdateDisabled = useFlag('disableProjectCreationAndUpdate')
+  const { data: selectedOrganization } = useSelectedOrganizationQuery()
 
   const { isSuccess: isPermissionsLoaded, can: canReadSubscriptions } = useAsyncCheckPermissions(
     PermissionAction.BILLING_READ,
@@ -40,6 +44,8 @@ const Subscription = () => {
 
   const currentPlan = subscription?.plan
   const planName = currentPlan?.name ?? 'Unknown'
+  const isStripeManagedOrganization =
+    selectedOrganization?.managed_by === MANAGED_BY.STRIPE_PROJECTS
 
   const canChangeTier =
     !projectUpdateDisabled && !['enterprise', 'platform'].includes(currentPlan?.id ?? '')
@@ -83,7 +89,9 @@ const Subscription = () => {
                   </div>
 
                   <div>
-                    {canChangeTier && (
+                    {isStripeManagedOrganization ? (
+                      <StripeManagedPlanNotice />
+                    ) : canChangeTier ? (
                       <ProjectUpdateDisabledTooltip projectUpdateDisabled={projectUpdateDisabled}>
                         <Button
                           type="default"
@@ -94,40 +102,38 @@ const Subscription = () => {
                           Change subscription plan
                         </Button>
                       </ProjectUpdateDisabledTooltip>
+                    ) : projectUpdateDisabled ? (
+                      <Alert
+                        className="mt-2"
+                        withIcon
+                        variant="info"
+                        title={`Unable to update plan from ${planName}`}
+                      >
+                        We have temporarily disabled project and subscription changes - our
+                        engineers are working on a fix.
+                      </Alert>
+                    ) : (
+                      <Alert
+                        withIcon
+                        className="mt-2"
+                        variant="info"
+                        title={`Unable to update plan from ${planName}`}
+                        actions={[
+                          <Button asChild key="contact-support" type="default">
+                            <SupportLink
+                              queryParams={{
+                                category: SupportCategories.SALES_ENQUIRY,
+                                subject: `Change plan away from ${planName}`,
+                              }}
+                            >
+                              Contact support
+                            </SupportLink>
+                          </Button>,
+                        ]}
+                      >
+                        Please contact us if you'd like to change your plan.
+                      </Alert>
                     )}
-                    {!canChangeTier &&
-                      (projectUpdateDisabled ? (
-                        <Alert
-                          className="mt-2"
-                          withIcon
-                          variant="info"
-                          title={`Unable to update plan from ${planName}`}
-                        >
-                          We have temporarily disabled project and subscription changes - our
-                          engineers are working on a fix.
-                        </Alert>
-                      ) : (
-                        <Alert
-                          withIcon
-                          className="mt-2"
-                          variant="info"
-                          title={`Unable to update plan from ${planName}`}
-                          actions={[
-                            <Button asChild key="contact-support" type="default">
-                              <SupportLink
-                                queryParams={{
-                                  category: SupportCategories.SALES_ENQUIRY,
-                                  subject: `Change plan away from ${planName}`,
-                                }}
-                              >
-                                Contact support
-                              </SupportLink>
-                            </Button>,
-                          ]}
-                        >
-                          Please contact us if you'd like to change your plan.
-                        </Alert>
-                      ))}
                   </div>
 
                   {!subscription?.usage_billing_enabled && (
