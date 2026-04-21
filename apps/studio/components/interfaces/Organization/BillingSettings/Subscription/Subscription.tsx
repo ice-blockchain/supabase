@@ -8,7 +8,7 @@ import { ShimmeringLoader } from 'ui-patterns/ShimmeringLoader'
 import { ProjectUpdateDisabledTooltip } from '../ProjectUpdateDisabledTooltip'
 import { Restriction } from '../Restriction'
 import { PlanUpdateSidePanel } from './PlanUpdateSidePanel'
-import { StripeManagedPlanNotice } from './StripeManagedPlanNotice'
+import { STRIPE_DASHBOARD_URL } from '@/components/interfaces/Billing/Payment/PaymentMethods/StripePaymentConnection'
 import { SupportLink } from '@/components/interfaces/Support/SupportLink'
 import {
   ScaffoldSection,
@@ -17,6 +17,7 @@ import {
 } from '@/components/layouts/Scaffold'
 import AlertError from '@/components/ui/AlertError'
 import NoPermission from '@/components/ui/NoPermission'
+import PartnerManagedResource from '@/components/ui/PartnerManagedResource'
 import { useOrgSubscriptionQuery } from '@/data/subscriptions/org-subscription-query'
 import { useAsyncCheckPermissions } from '@/hooks/misc/useCheckPermissions'
 import { useSelectedOrganizationQuery } from '@/hooks/misc/useSelectedOrganization'
@@ -90,7 +91,15 @@ const Subscription = () => {
 
                   <div>
                     {isStripeManagedOrganization ? (
-                      <StripeManagedPlanNotice />
+                      <PartnerManagedResource
+                        managedBy={MANAGED_BY.STRIPE_PROJECTS}
+                        resource="Organization plans"
+                        title="Organization plans are managed by Stripe."
+                        cta={{
+                          overrideUrl: STRIPE_DASHBOARD_URL,
+                          message: 'Change Plan in Stripe Dashboard',
+                        }}
+                      />
                     ) : canChangeTier ? (
                       <ProjectUpdateDisabledTooltip projectUpdateDisabled={projectUpdateDisabled}>
                         <Button

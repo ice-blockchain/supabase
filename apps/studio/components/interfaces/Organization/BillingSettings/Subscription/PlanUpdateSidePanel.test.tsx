@@ -129,9 +129,7 @@ describe('PlanUpdateSidePanel', () => {
   it('shows Stripe-managed messaging and disables plan changes for Stripe-connected orgs', () => {
     render(<PlanUpdateSidePanel />)
 
-    expect(screen.queryByTestId('partner-managed-resource')).not.toBeInTheDocument()
-    expect(screen.getByText('Subscription plan managed through Stripe')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Manage in Stripe Dashboard' })).toBeInTheDocument()
+    expect(screen.getByTestId('partner-managed-resource')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Upgrade to Pro' })).toBeDisabled()
   })
 

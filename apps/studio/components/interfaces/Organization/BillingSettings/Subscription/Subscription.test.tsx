@@ -77,8 +77,10 @@ describe('Subscription', () => {
   it('shows a Stripe-managed plan notice instead of the plan-change CTA', () => {
     render(<Subscription />)
 
-    expect(screen.getByText('Subscription plan managed through Stripe')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Manage in Stripe Dashboard' })).toBeInTheDocument()
+    expect(screen.getByText('Organization plans are managed by Stripe.')).toBeInTheDocument()
+    expect(
+      screen.getByRole('link', { name: 'Change Plan in Stripe Dashboard' })
+    ).toBeInTheDocument()
     expect(
       screen.queryByRole('button', { name: 'Change subscription plan' })
     ).not.toBeInTheDocument()
@@ -98,6 +100,6 @@ describe('Subscription', () => {
     render(<Subscription />)
 
     expect(screen.getByRole('button', { name: 'Change subscription plan' })).toBeInTheDocument()
-    expect(screen.queryByText('Subscription plan managed through Stripe')).not.toBeInTheDocument()
+    expect(screen.queryByText('Organization plans are managed by Stripe.')).not.toBeInTheDocument()
   })
 })

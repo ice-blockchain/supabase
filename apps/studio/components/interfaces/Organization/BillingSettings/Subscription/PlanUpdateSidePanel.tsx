@@ -14,9 +14,9 @@ import DowngradeModal from './DowngradeModal'
 import { EnterpriseCard } from './EnterpriseCard'
 import { ExitSurveyModal } from './ExitSurveyModal'
 import MembersExceedLimitModal from './MembersExceedLimitModal'
-import { StripeManagedPlanNotice } from './StripeManagedPlanNotice'
 import { SubscriptionPlanUpdateDialog } from './SubscriptionPlanUpdateDialog'
 import UpgradeSurveyModal from './UpgradeModal'
+import { STRIPE_DASHBOARD_URL } from '@/components/interfaces/Billing/Payment/PaymentMethods/StripePaymentConnection'
 import { getPlanChangeType } from '@/components/interfaces/Billing/Subscription/Subscription.utils'
 import { ButtonTooltip } from '@/components/ui/ButtonTooltip'
 import PartnerManagedResource from '@/components/ui/PartnerManagedResource'
@@ -213,7 +213,15 @@ export const PlanUpdateSidePanel = () => {
       >
         {selectedOrganization &&
           (isStripeManagedOrganization ? (
-            <StripeManagedPlanNotice />
+            <PartnerManagedResource
+              managedBy={MANAGED_BY.STRIPE_PROJECTS}
+              resource="Organization plans"
+              title="Organization plans are managed by Stripe."
+              cta={{
+                overrideUrl: STRIPE_DASHBOARD_URL,
+                message: 'Change Plan in Stripe Dashboard',
+              }}
+            />
           ) : isPartnerBilledOrganization ? (
             <PartnerManagedResource
               managedBy={selectedOrganization.managed_by}
