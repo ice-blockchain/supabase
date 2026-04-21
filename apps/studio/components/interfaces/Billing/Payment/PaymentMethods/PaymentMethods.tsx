@@ -77,7 +77,11 @@ const PaymentMethods = () => {
         <ScaffoldSectionContent>
           {isStripeManagedOrganization ? (
             <StripePaymentConnection
-              status="connected" // TODO: derive from the Stripe token state once platform exposes it here
+              // TODO: derive from the Stripe token state once platform exposes it here
+              status="connected"
+              tokenLast4="4242"
+              tokenExpMonth={12}
+              tokenExpYear={2028}
             />
           ) : selectedOrganization && isPartnerBilledOrganization ? (
             <PartnerManagedResource
