@@ -20,6 +20,9 @@ services:
       - ../traffic-one/studio-patches/apiHelpers.ts:/app/apps/studio/lib/api/apiHelpers.ts:ro
       - ../traffic-one/studio-patches/.env.local:/app/apps/studio/.env.local:ro
     environment:
+      # Bind Next.js listener to both IPv4 and IPv6 interfaces (prebuilt image runs next dev)
+      HOSTNAME: "::"
+      STUDIO_PORT: 3000
       NEXT_PUBLIC_IS_PLATFORM: "true"
       NEXT_PUBLIC_SELF_HOSTED_PLATFORM: "true"
       NEXT_PUBLIC_API_URL: ${SUPABASE_PUBLIC_URL}/api
@@ -30,6 +33,18 @@ services:
       NEXT_PUBLIC_SITE_URL: ${SUPABASE_PUBLIC_URL}
       PLATFORM_PG_META_URL: http://meta:8080
       GOTRUE_INTERNAL_URL: http://kong:8000/auth/v1
+
+  functions:
+    environment:
+      # traffic-one edge function: restricted DB role, Logflare usage queries, pooler + postgres metadata
+      TRAFFIC_DB_URL: postgresql://traffic_api:${TRAFFIC_API_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      LOGFLARE_URL: http://analytics:4000
+      LOGFLARE_PRIVATE_ACCESS_TOKEN: ${LOGFLARE_PRIVATE_ACCESS_TOKEN}
+      POOLER_TENANT_ID: ${POOLER_TENANT_ID}
+      POOLER_DEFAULT_POOL_SIZE: ${POOLER_DEFAULT_POOL_SIZE}
+      POOLER_MAX_CLIENT_CONN: ${POOLER_MAX_CLIENT_CONN}
+      POOLER_PROXY_PORT_TRANSACTION: ${POOLER_PROXY_PORT_TRANSACTION}
+      POSTGRES_PORT: ${POSTGRES_PORT}
 
   kong:
     depends_on:

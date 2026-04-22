@@ -15,8 +15,6 @@ services:
   studio:
     container_name: supabase-studio
     image: supabase/studio:2026.04.08-sha-205cbe7
-    # Raise Studio's container memory ceiling (override with STUDIO_MEM_LIMIT, e.g. 12g).
-    mem_limit: ${STUDIO_MEM_LIMIT:-8g}
     restart: unless-stopped
     healthcheck:
       test:
@@ -26,15 +24,13 @@ services:
         ]
       timeout: 10s
       interval: 5s
-      retries: 10
-      start_period: 30s
+      retries: 3
     depends_on:
       analytics:
         condition: service_healthy
     environment:
-      # Binds nestjs listener to both IPv4 and IPv6 network interfaces
-      HOSTNAME: "::"
-      STUDIO_PORT: 3000
+      #  Listen on all IPv4 interfaces
+      HOSTNAME: "0.0.0.0"
 
       STUDIO_PG_META_URL: http://meta:8080
       POSTGRES_PORT: ${POSTGRES_PORT}
@@ -460,14 +456,6 @@ services:
       SUPABASE_PUBLISHABLE_KEYS: "{\"default\":\"${SUPABASE_PUBLISHABLE_KEY:-}\"}"
       SUPABASE_SECRET_KEYS: "{\"default\":\"${SUPABASE_SECRET_KEY:-}\"}"
       SUPABASE_DB_URL: postgresql://postgres:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
-      TRAFFIC_DB_URL: postgresql://traffic_api:${TRAFFIC_API_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
-      LOGFLARE_URL: http://analytics:4000
-      LOGFLARE_PRIVATE_ACCESS_TOKEN: ${LOGFLARE_PRIVATE_ACCESS_TOKEN}
-      POOLER_TENANT_ID: ${POOLER_TENANT_ID}
-      POOLER_DEFAULT_POOL_SIZE: ${POOLER_DEFAULT_POOL_SIZE}
-      POOLER_MAX_CLIENT_CONN: ${POOLER_MAX_CLIENT_CONN}
-      POOLER_PROXY_PORT_TRANSACTION: ${POOLER_PROXY_PORT_TRANSACTION}
-      POSTGRES_PORT: ${POSTGRES_PORT}
       # TODO: Allow configuring VERIFY_JWT per function.
       VERIFY_JWT: "${FUNCTIONS_VERIFY_JWT}"
     command:

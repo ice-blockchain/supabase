@@ -199,6 +199,26 @@ Direct Postgres via `TRAFFIC_DB_URL` using a restricted `traffic_api` role. This
 ### Routing
 Kong `strip_path: true` strips route prefixes (`/api/platform/profile`, `/api/platform/organizations`, etc.). The function receives clean paths like `/`, `/access-tokens`, `/permissions`. For organizations, slug subpaths like `/{slug}` and `/{slug}/projects` are preserved after prefix stripping.
 
+**Studio port asymmetry (8082 vs 3000).** The prebuilt `supabase/studio:2026.04.08-sha-205cbe7` image runs `next dev -p ${STUDIO_PORT:-8082}` (see `apps/studio/package.json`). The base `docker/docker-compose.yml` healthcheck therefore probes `http://localhost:8082/api/platform/profile` rather than the upstream `localhost:3000` URL. Platform mode disables the healthcheck entirely in `docker-compose.platform.yml`, so this matters only for non-platform self-hosted users — if they run a build that listens on 3000 instead of 8082, the healthcheck will fail. This is flagged in [§ Known Gaps / Remaining Work](#known-gaps--remaining-work).
+
+### Kong Open Auth Routes
+
+Five Kong services expose GoTrue endpoints **without** the `key-auth` plugin (unlike the `auth-v1-*` services that wrap GoTrue with the apikey requirement):
+
+| Route | Kong service | Upstream |
+|-------|-------------|----------|
+| `POST /auth/v1/token` | `auth-v1-open-token` | `http://auth:9999/token` |
+| `GET/PUT /auth/v1/user` | `auth-v1-open-user` | `http://auth:9999/user` |
+| `POST /auth/v1/logout` | `auth-v1-open-logout` | `http://auth:9999/logout` |
+| `POST /auth/v1/signup` | `auth-v1-open-signup` | `http://auth:9999/signup` |
+| `POST /auth/v1/recover` | `auth-v1-open-recover` | `http://auth:9999/recover` |
+
+All five use `strip_path: true`, a single CORS plugin, and forward any body/headers verbatim to the GoTrue upstream.
+
+**Why they are open.** Studio's platform-mode `AuthClient` (see `traffic-one/studio-patches/gotrue.ts`) is constructed with only `NEXT_PUBLIC_GOTRUE_URL` and does not attach an `apikey` header on login/refresh/logout/signup/recover calls, matching supabase.com's production dashboard behavior. Gating these endpoints behind `key-auth` in Kong would break the sign-in form, the refresh-token loop, sign-up, and password recovery in self-hosted platform mode. The endpoints themselves remain safe because GoTrue performs its own authentication (password, refresh token, JWT Bearer, or recovery nonce) and enforces rate limits / captcha internally.
+
+**Scope of exposure.** The `paths:` entries use prefix matching, so `POST /auth/v1/token?grant_type=refresh_token` and `PATCH /auth/v1/user` both route through. Other GoTrue endpoints (admin APIs, SSO, MFA) continue to flow through `auth-v1-*` which still requires the dashboard apikey.
+
 ### CORS
 Returns `Access-Control-Allow-Origin: *` and `Access-Control-Allow-Headers` on all responses and handles OPTIONS preflight.
 
@@ -354,10 +374,52 @@ Authorization is checked via `getMemberHighestRoleId()` which returns the maximu
 
 ## Files Changed (Outside traffic-one/)
 
-- `docker/volumes/api/kong.yml` — platform-profile, platform-signup, platform-reset-password, platform-organizations services+routes before dashboard catch-all
-- `docker/docker-compose.yml` — `TRAFFIC_DB_URL` env var on the `functions` service
-- `docker/.env.example` — `TRAFFIC_API_PASSWORD` variable
-- `docker/volumes/functions/traffic-one` — copy of `traffic-one/functions/` (deployed by `deploy.sh`)
+See [§ Studio Patch Strategy](#studio-patch-strategy) for why some Studio changes are committed to source while others are mounted as volume overlays.
+
+### Studio source (committed)
+
+- `apps/studio/components/interfaces/Auth/Hooks/HooksListing.tsx` — guard `CreateHookSheet` against undefined `authConfig` (defensive null-check; upstream-worthy correctness fix).
+- `apps/studio/components/interfaces/SQLEditor/UtilityPanel/UtilityPanel.tsx` — null-safety on `payload` / `payload.content` and `snippet?.name` (defensive null-check).
+- `apps/studio/components/interfaces/Settings/Database/PoolingModesModal.tsx` — `Array.isArray` guard before `.find()` on the pooling modes list (defensive null-check).
+- `apps/studio/lib/api/incident-banner.ts` — return `[]` instead of throwing when `INCIDENT_IO_API_KEY` is unset (self-hosted gate).
+- `apps/studio/lib/api/self-hosted/util.ts` — allow self-hosted operation when `IS_PLATFORM && PLATFORM_PG_META_URL` is set (self-hosted-platform gate).
+- `apps/studio/proxy.ts` — early-return from the cloud proxy when `NEXT_PUBLIC_SELF_HOSTED_PLATFORM === 'true'` (self-hosted-platform gate).
+
+### Docker / Kong / env (committed)
+
+- `docker/docker-compose.yml` — Postgres image bumped to `supabase/postgres:17.6.1.084`; Studio healthcheck URL retargeted to `http://localhost:8082/api/platform/profile` because the prebuilt `supabase/studio:2026.04.08-sha-205cbe7` image runs `next dev` on port 8082 (see `apps/studio/package.json`).
+- `docker/docker-compose.platform.yml` — platform overlay. For `studio`: volume mounts for `traffic-one/studio-patches/*`, volume mounts for the three `apps/studio/*` module files patched above, `mem_limit`, healthcheck disable, `HOSTNAME: "::"`, `STUDIO_PORT: 3000`, and `NEXT_PUBLIC_*` platform env. For `functions`: `TRAFFIC_DB_URL`, `LOGFLARE_URL`, `LOGFLARE_PRIVATE_ACCESS_TOKEN`, `POOLER_TENANT_ID`, `POOLER_DEFAULT_POOL_SIZE`, `POOLER_MAX_CLIENT_CONN`, `POOLER_PROXY_PORT_TRANSACTION`, `POSTGRES_PORT`.
+- `docker/volumes/api/kong.yml` — open auth routes (`/auth/v1/{token,user,logout,signup,recover}`; see [§ Kong Open Auth Routes](#kong-open-auth-routes)) plus the `platform-profile` / `platform-signup` / `platform-reset-password` / `platform-organizations` services + routes inserted before the dashboard catch-all.
+- `docker/.env.example` — `TRAFFIC_API_PASSWORD` variable (harmless in non-platform mode since nothing else references it in the base compose file).
+
+### Auto-generated (git-ignored)
+
+- `docker/volumes/functions/traffic-one/` — regenerated by `traffic-one/deploy.sh` (via `cp -r`) from `traffic-one/functions/`. Not tracked in git; see `.gitignore`.
+
+## Studio Patch Strategy
+
+Studio is delivered to self-hosted platform mode using two complementary mechanisms. The choice for any given patch is dictated by whether the target file is a plain `.ts` module that Next.js can re-bundle at request time or a `.tsx` component / build-time file that must be present in the image when it boots.
+
+### 1. Volume overlays (preferred, ephemeral)
+
+For `.ts` library files whose changes need to travel with the platform layer rather than a fork of Studio, `docker-compose.platform.yml` bind-mounts replacement files into the running container. These overlays are read by the in-container `next dev` server the first time the module is requested and re-read on edit.
+
+| Host path | Container path | Purpose |
+|-----------|----------------|---------|
+| `traffic-one/studio-patches/gotrue.ts` | `/app/packages/common/gotrue.ts` | Replace the shared `AuthClient` constructor so Studio talks directly to GoTrue via `NEXT_PUBLIC_GOTRUE_URL` without forwarding the dashboard apikey (pairs with [§ Kong Open Auth Routes](#kong-open-auth-routes)). |
+| `traffic-one/studio-patches/apiHelpers.ts` | `/app/apps/studio/lib/api/apiHelpers.ts` | Strip the `x-connection-encrypted` header in self-hosted platform mode so `pg-meta` falls back to its default `PG_CONNECTION`. |
+| `traffic-one/studio-patches/.env.local` | `/app/apps/studio/.env.local` | Inject platform-mode env values that Next.js reads at dev-server startup. |
+| `apps/studio/lib/api/incident-banner.ts` | `/app/apps/studio/lib/api/incident-banner.ts` | Same file as the committed source edit; mounted read-only so platform-mode containers pick up the committed version of the file instead of whatever version shipped with the image. |
+| `apps/studio/proxy.ts` | `/app/apps/studio/proxy.ts` | Same rationale as `incident-banner.ts`. |
+| `apps/studio/lib/api/self-hosted/util.ts` | `/app/apps/studio/lib/api/self-hosted/util.ts` | Same rationale as above. |
+
+### 2. Source modifications (permanent)
+
+For `.tsx` React components and any file that must be baked into the image at build time, the change is committed to `apps/studio/*` so that a future Studio rebuild preserves the fix. These are the committed Studio edits listed in [§ Files Changed (Outside traffic-one/)](#files-changed-outside-traffic-one). Three of them (`incident-banner.ts`, `proxy.ts`, `self-hosted/util.ts`) are *also* mounted as read-only overlays by `docker-compose.platform.yml` so that the currently pinned `supabase/studio` image — which was built before these fixes existed — picks them up at runtime without waiting for a rebuild.
+
+### Dev-mode assumption
+
+The whole strategy rests on the prebuilt `supabase/studio:2026.04.08-sha-205cbe7` image running Next.js in **dev mode** (`next dev -p 8082`), where modules are re-bundled on demand from the mounted `.ts` files. If that image (or a replacement) is ever switched to a production build (`next start` against a prebaked `.next/`), the bind mounts in `docker-compose.platform.yml` will silently have no effect — the bundled JavaScript in the image will be served instead. Upgrading the pinned image tag therefore requires re-validating that it still runs `next dev`, or migrating every overlay into the source tree and rebuilding the image from this repo.
 
 ## Environment Variables (Usage)
 
@@ -375,8 +437,29 @@ Authorization is checked via `getMemberHighestRoleId()` which returns the maximu
 
 ## Invariants
 
-- Studio source code is never modified
+- Studio source is patched only for (a) defensive null-checks that are upstream-worthy correctness fixes and (b) self-hosted-platform-mode gates; every patched file is enumerated in [§ Files Changed (Outside traffic-one/)](#files-changed-outside-traffic-one). For the split between source edits and volume overlays, see [§ Studio Patch Strategy](#studio-patch-strategy).
 - All response shapes match `packages/api-types/types/platform.d.ts`
 - The dashboard catch-all route in Kong continues to work
 - `VERIFY_JWT` remains `false`; the function handles auth itself
 - Existing edge functions (`hello`, etc.) are unaffected
+
+## Known Gaps / Remaining Work
+
+The following issues were identified by self-hosted platform-mode QA passes against the current `traffic-one` branch and are **not yet addressed**. Each entry notes the likely landing spot in `traffic-one/` for a future fix; landing spots are suggestions, not commitments.
+
+### High severity
+
+- **`GET /api/platform/auth/{ref}/config` returns 404** — breaks `/auth/providers`, `/auth/hooks`, and `/auth/url-configuration`. Studio error: "Failed to retrieve auth configuration for hooks". Fix requires a new route (e.g. `traffic-one/functions/routes/auth-config.ts`) or an extension to `routes/auth.ts` that proxies the relevant subset of the GoTrue admin API (providers, hooks, URL settings) or returns a stub, plus a new Kong route.
+- **`/settings/infrastructure` crashes with `TypeError: Cannot read properties of undefined (reading 'map')`** — thrown inside Studio's `InfrastructureActivity.tsx` because `infra-monitoring-queries.ts` expects monitoring data that self-hosted does not produce. Fix options: add a client-side null guard (Studio source) or stub the `GET /api/platform/projects/{ref}/infra-monitoring` endpoint in traffic-one (`routes/projects.ts`) returning an empty dataset.
+- **`GET /api/platform/database/{ref}/backups` returns 404** — breaks `/database/backups/scheduled`. Fix: add `traffic-one/functions/routes/backups.ts` (or fold into `routes/projects.ts`) returning an empty scheduled-backups array + a Kong route.
+
+### Medium severity
+
+- **`GET /api/platform/replication/{ref}/{destinations,pipelines,sources}` all return 404** — breaks `/database/replication`. Fix: add `traffic-one/functions/routes/replication.ts` returning empty arrays for each subpath + Kong routes.
+- **Tax IDs query key `["organizations",<slug>,"tax-ids"]` reports `data is undefined`** — even though `GET /api/platform/organizations/{slug}/tax-ids` is handled in `routes/billing.ts` and `services/billing.service.ts#listTaxIds`. The response shape (or a sibling `/customer` call on the same page) is likely not matching what Studio's hook expects. Fix: audit `billing.service.ts` / `routes/billing.ts` tax-ids response against `packages/api-types/types/platform.d.ts`.
+- **Sign-in SSR hydration mismatch in `LastSignInWrapper`** — Next.js dev overlay surfaces "Text content does not match server-rendered HTML" on `/sign-in`. The login form still works but the overlay must be dismissed. Fix lives in Studio source (`apps/studio/components/.../LastSignInWrapper.tsx`), not traffic-one.
+
+### Low severity
+
+- **TanStack Query DevTools button visible in platform mode** — the "Open TanStack query devtools" button renders in the bottom-left corner on every page. Fix: gate the devtools mount on `NEXT_PUBLIC_IS_PLATFORM !== 'true'` or a dedicated env flag in Studio source.
+- **Studio healthcheck port asymmetry** (also noted under [§ Routing](#routing)) — base `docker/docker-compose.yml` healthcheck probes `localhost:8082`, which only matches a Studio build running `next dev` / `next start` on port 8082. Non-platform self-hosted users whose Studio binary listens on 3000 will see the healthcheck fail; platform mode disables the healthcheck entirely so is unaffected.
