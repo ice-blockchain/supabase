@@ -148,16 +148,18 @@ export const HooksListing = () => {
             })}
         </div>
 
-        <CreateHookSheet
-          title={selectedHook?.title ?? null}
-          visible={!!selectedHook}
-          onDelete={() => {
-            const hook = hooks.find((h) => h.title === selectedHook?.title)
-            if (hook) setSelectedHookForDeletion(hook)
-          }}
-          onClose={() => setHook(null)}
-          authConfig={authConfig!}
-        />
+        {authConfig && (
+          <CreateHookSheet
+            title={selectedHook?.title ?? null}
+            visible={!!selectedHook}
+            onDelete={() => {
+              const hook = hooks.find((h) => h.title === selectedHook?.title)
+              if (hook) setSelectedHookForDeletion(hook)
+            }}
+            onClose={() => setHook(null)}
+            authConfig={authConfig}
+          />
+        )}
 
         <ConfirmationModal
           visible={!!selectedHookForDeletion}

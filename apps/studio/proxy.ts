@@ -33,6 +33,8 @@ const HOSTED_SUPPORTED_API_URLS = [
 ]
 
 export function proxy(request: NextRequest) {
+  if (process.env.NEXT_PUBLIC_SELF_HOSTED_PLATFORM === 'true') return
+
   if (
     IS_PLATFORM &&
     !HOSTED_SUPPORTED_API_URLS.some((url) => request.nextUrl.pathname.endsWith(url))

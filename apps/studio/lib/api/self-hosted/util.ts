@@ -13,9 +13,10 @@ import { IS_PLATFORM } from '@/lib/constants'
 
 /**
  * Asserts that the current environment is self-hosted.
+ * Self-hosted platform mode (Docker with IS_PLATFORM + PLATFORM_PG_META_URL) is allowed.
  */
 export function assertSelfHosted() {
-  if (IS_PLATFORM) {
+  if (IS_PLATFORM && !process.env.PLATFORM_PG_META_URL) {
     throw new Error('This function can only be called in self-hosted environments')
   }
 }

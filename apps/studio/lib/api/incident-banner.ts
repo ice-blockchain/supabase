@@ -102,13 +102,13 @@ async function fetchAllIncidents(apiKey: string, mode: string): Promise<Array<In
 /**
  * Fetches active banner incidents from the incident.io API.
  *
- * @returns Array of banner incidents
- * @throws Error if INCIDENT_IO_API_KEY is not set or the API returns an error
+ * @returns Array of banner incidents (empty if INCIDENT_IO_API_KEY is not configured)
+ * @throws Error if the API returns an error
  */
 export async function getBannerIncidents(): Promise<Array<BannerIncident>> {
   const apiKey = process.env.INCIDENT_IO_API_KEY
   if (!apiKey) {
-    throw new Error('INCIDENT_IO_API_KEY is not set')
+    return []
   }
 
   const incidentMode = IS_PROD ? 'standard' : 'test'
