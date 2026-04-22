@@ -8,6 +8,7 @@ import { MANAGED_BY } from '@/lib/constants/infrastructure'
 export type StripeTokenStatus = 'connected' | 'attention' | 'unknown'
 
 export const STRIPE_DASHBOARD_URL = 'https://dashboard.stripe.com'
+export const STRIPE_PROJECTS_DOCS_URL = 'https://docs.stripe.com/projects'
 
 interface StripePaymentConnectionProps {
   status?: StripeTokenStatus
@@ -77,8 +78,12 @@ export function StripePaymentConnection({
         )}
       </div>
       <Button asChild type="default" iconRight={<ExternalLink size={14} />}>
-        <a href={STRIPE_DASHBOARD_URL} target="_blank" rel="noopener noreferrer">
-          Manage in Stripe Dashboard
+        <a
+          href={`${STRIPE_PROJECTS_DOCS_URL}#manage-billing`}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Manage via Stripe CLI
         </a>
       </Button>
     </div>
