@@ -1,86 +1,88 @@
-import type { Pool } from "https://deno.land/x/postgres@v0.17.0/mod.ts";
+import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+
 import type {
+  CustomerResponse,
   GetSubscriptionResponse,
   InvoiceResponse,
-  CustomerResponse,
   PaymentMethodResponse,
-  TaxIdResponse,
   ProjectAddonsResponse,
   SelectedAddon,
-} from "../types/billing.ts";
+  TaxIdResponse,
+} from '../types/billing.ts'
 
 // ── Row types ────────────────────────────────────────────
 
 interface SubscriptionRow {
-  id: string;
-  organization_id: number;
-  status: string | null;
-  tier: string;
-  plan_id: string;
-  plan_name: string;
-  billing_cycle_anchor: number;
-  usage_billing_enabled: boolean;
-  nano_enabled: boolean;
-  current_period_start: string | null;
-  current_period_end: string | null;
-  stripe_subscription_id: string | null;
-  stripe_customer_id: string | null;
+  id: string
+  organization_id: number
+  status: string | null
+  tier: string
+  plan_id: string
+  plan_name: string
+  billing_cycle_anchor: number
+  usage_billing_enabled: boolean
+  nano_enabled: boolean
+  current_period_start: string | null
+  current_period_end: string | null
+  stripe_subscription_id: string | null
+  stripe_customer_id: string | null
 }
 
 interface CustomerRow {
-  id: number;
-  organization_id: number;
-  stripe_customer_id: string | null;
-  billing_name: string | null;
-  city: string | null;
-  country: string | null;
-  line1: string | null;
-  line2: string | null;
-  postal_code: string | null;
-  state: string | null;
+  id: number
+  organization_id: number
+  stripe_customer_id: string | null
+  billing_name: string | null
+  city: string | null
+  country: string | null
+  line1: string | null
+  line2: string | null
+  postal_code: string | null
+  state: string | null
 }
 
 interface PaymentMethodRow {
-  id: string;
-  type: string;
-  card_brand: string | null;
-  card_last4: string | null;
-  card_exp_month: number | null;
-  card_exp_year: number | null;
-  is_default: boolean;
-  stripe_payment_method_id: string | null;
+  id: string
+  type: string
+  card_brand: string | null
+  card_last4: string | null
+  card_exp_month: number | null
+  card_exp_year: number | null
+  is_default: boolean
+  stripe_payment_method_id: string | null
 }
 
 interface InvoiceRow {
-  id: string;
-  number: string | null;
-  status: string;
-  amount_due: number;
-  subtotal: number;
-  period_start: string | null;
-  period_end: string | null;
-  invoice_pdf: string | null;
-  stripe_invoice_id: string | null;
-  subscription_id: string | null;
-  created_at: string;
+  id: string
+  number: string | null
+  status: string
+  amount_due: number
+  subtotal: number
+  period_start: string | null
+  period_end: string | null
+  invoice_pdf: string | null
+  stripe_invoice_id: string | null
+  subscription_id: string | null
+  created_at: string
 }
 
 interface TaxIdRow {
-  id: number;
-  type: string;
-  value: string;
-  created_at: string;
+  id: number
+  type: string
+  value: string
+  country: string | null
+  created_at: string
 }
 
 interface CreditRow {
-  balance: number;
+  balance: number
 }
 
 interface ProjectAddonRow {
-  id: number;
-  project_ref: string;
-  addon_type: string;
-  addon_variant: string;
+  id: number
+  project_ref: string
+  addon_type: string
+  addon_variant: string
 }
 
 // ── Row mappers ──────────────────────────────────────────
@@ -88,10 +90,10 @@ interface ProjectAddonRow {
 function subscriptionToResponse(row: SubscriptionRow): GetSubscriptionResponse {
   const periodStart = row.current_period_start
     ? Math.floor(new Date(row.current_period_start).getTime() / 1000)
-    : 0;
+    : 0
   const periodEnd = row.current_period_end
     ? Math.floor(new Date(row.current_period_end).getTime() / 1000)
-    : 0;
+    : 0
 
   return {
     addons: [],
@@ -101,15 +103,15 @@ function subscriptionToResponse(row: SubscriptionRow): GetSubscriptionResponse {
     current_period_start: periodStart,
     customer_balance: 0,
     next_invoice_at: periodEnd,
-    payment_method_type: "none",
+    payment_method_type: 'none',
     plan: {
-      id: row.plan_id as GetSubscriptionResponse["plan"]["id"],
+      id: row.plan_id as GetSubscriptionResponse['plan']['id'],
       name: row.plan_name,
     },
     project_addons: [],
     scheduled_plan_change: null,
     usage_billing_enabled: row.usage_billing_enabled ?? false,
-  };
+  }
 }
 
 function invoiceRowToResponse(row: InvoiceRow): InvoiceResponse {
@@ -125,7 +127,7 @@ function invoiceRowToResponse(row: InvoiceRow): InvoiceResponse {
     stripe_invoice_id: row.stripe_invoice_id,
     subscription_id: row.subscription_id,
     created_at: row.created_at,
-  };
+  }
 }
 
 function customerRowToResponse(row: CustomerRow): CustomerResponse {
@@ -137,7 +139,7 @@ function customerRowToResponse(row: CustomerRow): CustomerResponse {
     line2: row.line2,
     postal_code: row.postal_code,
     state: row.state,
-  };
+  }
 }
 
 function paymentMethodRowToResponse(row: PaymentMethodRow): PaymentMethodResponse {
@@ -149,37 +151,40 @@ function paymentMethodRowToResponse(row: PaymentMethodRow): PaymentMethodRespons
     card_exp_month: row.card_exp_month,
     card_exp_year: row.card_exp_year,
     is_default: row.is_default,
-  };
+  }
 }
 
-function taxIdRowToResponse(row: TaxIdRow): TaxIdResponse {
+// Wraps the latest tax_id row (or null) in the OpenAPI-shape
+// `{ tax_id: { country, type, value } | null }` that Studio consumes via
+// `components['schemas']['TaxIdResponse']`. We only surface a single tax ID
+// per org to match the upstream Supabase API semantics.
+function taxIdRowToResponse(row: TaxIdRow | null): TaxIdResponse {
+  if (!row) return { tax_id: null }
   return {
-    id: row.id,
-    type: row.type,
-    value: row.value,
-    created_at: row.created_at,
-  };
+    tax_id: {
+      country: row.country ?? '',
+      type: row.type,
+      value: row.value,
+    },
+  }
 }
 
 // ── Subscription ─────────────────────────────────────────
 
-export async function getSubscription(
-  pool: Pool,
-  orgId: number,
-): Promise<GetSubscriptionResponse> {
-  const connection = await pool.connect();
+export async function getSubscription(pool: Pool, orgId: number): Promise<GetSubscriptionResponse> {
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject<SubscriptionRow>`
       SELECT * FROM traffic.subscriptions WHERE organization_id = ${orgId}
-    `;
+    `
     if (result.rows.length === 0) {
       return subscriptionToResponse({
-        id: "",
+        id: '',
         organization_id: orgId,
-        status: "active",
-        tier: "tier_free",
-        plan_id: "free",
-        plan_name: "Free",
+        status: 'active',
+        tier: 'tier_free',
+        plan_id: 'free',
+        plan_name: 'Free',
         billing_cycle_anchor: 0,
         usage_billing_enabled: false,
         nano_enabled: true,
@@ -187,11 +192,11 @@ export async function getSubscription(
         current_period_end: null,
         stripe_subscription_id: null,
         stripe_customer_id: null,
-      });
+      })
     }
-    return subscriptionToResponse(result.rows[0]);
+    return subscriptionToResponse(result.rows[0])
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
@@ -200,54 +205,54 @@ export async function updateSubscription(
   orgId: number,
   planId: string,
   planName: string,
-  tier: string,
+  tier: string
 ): Promise<GetSubscriptionResponse> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
-    const tx = connection.createTransaction("update_subscription");
-    await tx.begin();
+    const tx = connection.createTransaction('update_subscription')
+    await tx.begin()
 
     const existing = await tx.queryObject<{ id: string }>`
       SELECT id FROM traffic.subscriptions WHERE organization_id = ${orgId}
-    `;
+    `
 
-    let result;
+    let result
     if (existing.rows.length === 0) {
       result = await tx.queryObject<SubscriptionRow>`
         INSERT INTO traffic.subscriptions (organization_id, status, plan_id, plan_name, tier)
         VALUES (${orgId}, 'active', ${planId}, ${planName}, ${tier})
         RETURNING *
-      `;
+      `
     } else {
       result = await tx.queryObject<SubscriptionRow>`
         UPDATE traffic.subscriptions
         SET plan_id = ${planId}, plan_name = ${planName}, tier = ${tier}
         WHERE organization_id = ${orgId}
         RETURNING *
-      `;
+      `
     }
 
-    await tx.commit();
-    return subscriptionToResponse(result.rows[0]);
+    await tx.commit()
+    return subscriptionToResponse(result.rows[0])
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
 export async function previewSubscriptionChange(
   pool: Pool,
   orgId: number,
-  _targetPlan: string,
+  _targetPlan: string
 ): Promise<{ amount_due: number; billing_preview: Record<string, unknown> }> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
     const sub = await connection.queryObject<SubscriptionRow>`
       SELECT * FROM traffic.subscriptions WHERE organization_id = ${orgId}
-    `;
-    const _current = sub.rows[0] ?? null;
-    return { amount_due: 0, billing_preview: {} };
+    `
+    const _current = sub.rows[0] ?? null
+    return { amount_due: 0, billing_preview: {} }
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
@@ -255,11 +260,17 @@ export async function previewSubscriptionChange(
 
 export function getPlans(): Record<string, unknown>[] {
   return [
-    { id: "free", name: "Free", price: 0, description: "Perfect for hobby projects", features: [] },
-    { id: "pro", name: "Pro", price: 2500, description: "For production applications", features: [] },
-    { id: "team", name: "Team", price: 59900, description: "For scaling teams", features: [] },
-    { id: "enterprise", name: "Enterprise", price: 0, description: "Custom pricing", features: [] },
-  ];
+    { id: 'free', name: 'Free', price: 0, description: 'Perfect for hobby projects', features: [] },
+    {
+      id: 'pro',
+      name: 'Pro',
+      price: 2500,
+      description: 'For production applications',
+      features: [],
+    },
+    { id: 'team', name: 'Team', price: 59900, description: 'For scaling teams', features: [] },
+    { id: 'enterprise', name: 'Enterprise', price: 0, description: 'Custom pricing', features: [] },
+  ]
 }
 
 // ── Invoices ─────────────────────────────────────────────
@@ -268,96 +279,96 @@ export async function listInvoices(
   pool: Pool,
   orgId: number,
   offset = 0,
-  limit = 10,
+  limit = 10
 ): Promise<InvoiceResponse[]> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject<InvoiceRow>`
       SELECT * FROM traffic.invoices
       WHERE organization_id = ${orgId}
       ORDER BY created_at DESC
       OFFSET ${offset} LIMIT ${limit}
-    `;
-    return result.rows.map(invoiceRowToResponse);
+    `
+    return result.rows.map(invoiceRowToResponse)
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
-export async function countInvoices(
-  pool: Pool,
-  orgId: number,
-): Promise<number> {
-  const connection = await pool.connect();
+export async function countInvoices(pool: Pool, orgId: number): Promise<number> {
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject<{ count: number }>`
       SELECT COUNT(*)::int AS count FROM traffic.invoices WHERE organization_id = ${orgId}
-    `;
-    return result.rows[0].count;
+    `
+    return result.rows[0].count
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
 export async function getInvoice(
   pool: Pool,
   orgId: number,
-  invoiceId: string,
+  invoiceId: string
 ): Promise<InvoiceResponse | null> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject<InvoiceRow>`
       SELECT * FROM traffic.invoices
       WHERE id = ${invoiceId} AND organization_id = ${orgId}
-    `;
-    if (result.rows.length === 0) return null;
-    return invoiceRowToResponse(result.rows[0]);
+    `
+    if (result.rows.length === 0) return null
+    return invoiceRowToResponse(result.rows[0])
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
-export async function countOverdueInvoices(
-  pool: Pool,
-): Promise<number> {
-  const connection = await pool.connect();
+export async function countOverdueInvoices(pool: Pool): Promise<number> {
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject<{ count: number }>`
       SELECT COUNT(*)::int AS count FROM traffic.invoices
       WHERE status IN ('open', 'past_due', 'uncollectible')
-    `;
-    return result.rows[0].count;
+    `
+    return result.rows[0].count
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
 // ── Customer ─────────────────────────────────────────────
 
-export async function getCustomer(
-  pool: Pool,
-  orgId: number,
-): Promise<CustomerResponse> {
-  const connection = await pool.connect();
+export async function getCustomer(pool: Pool, orgId: number): Promise<CustomerResponse> {
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject<CustomerRow>`
       SELECT * FROM traffic.customers WHERE organization_id = ${orgId}
-    `;
+    `
     if (result.rows.length === 0) {
-      return { billing_name: null, city: null, country: null, line1: null, line2: null, postal_code: null, state: null };
+      return {
+        billing_name: null,
+        city: null,
+        country: null,
+        line1: null,
+        line2: null,
+        postal_code: null,
+        state: null,
+      }
     }
-    return customerRowToResponse(result.rows[0]);
+    return customerRowToResponse(result.rows[0])
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
 export async function upsertCustomer(
   pool: Pool,
   orgId: number,
-  data: Partial<CustomerResponse>,
+  data: Partial<CustomerResponse>
 ): Promise<CustomerResponse> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject<CustomerRow>`
       INSERT INTO traffic.customers (organization_id, billing_name, city, country, line1, line2, postal_code, state)
@@ -381,10 +392,10 @@ export async function upsertCustomer(
         state = COALESCE(EXCLUDED.state, traffic.customers.state),
         updated_at = now()
       RETURNING *
-    `;
-    return customerRowToResponse(result.rows[0]);
+    `
+    return customerRowToResponse(result.rows[0])
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
@@ -392,80 +403,82 @@ export async function upsertCustomer(
 
 export async function listPaymentMethods(
   pool: Pool,
-  orgId: number,
+  orgId: number
 ): Promise<PaymentMethodResponse[]> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject<PaymentMethodRow>`
       SELECT * FROM traffic.payment_methods
       WHERE organization_id = ${orgId}
       ORDER BY created_at DESC
-    `;
-    return result.rows.map(paymentMethodRowToResponse);
+    `
+    return result.rows.map(paymentMethodRowToResponse)
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
 export async function deletePaymentMethod(
   pool: Pool,
   orgId: number,
-  paymentMethodId: string,
+  paymentMethodId: string
 ): Promise<boolean> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject`
       DELETE FROM traffic.payment_methods
       WHERE id = ${paymentMethodId} AND organization_id = ${orgId}
-    `;
-    return (result.rowCount ?? 0) > 0;
+    `
+    return (result.rowCount ?? 0) > 0
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
 export async function setDefaultPaymentMethod(
   pool: Pool,
   orgId: number,
-  paymentMethodId: string,
+  paymentMethodId: string
 ): Promise<boolean> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
-    const tx = connection.createTransaction("set_default_pm");
-    await tx.begin();
+    const tx = connection.createTransaction('set_default_pm')
+    await tx.begin()
 
     await tx.queryObject`
       UPDATE traffic.payment_methods SET is_default = false
       WHERE organization_id = ${orgId}
-    `;
+    `
     const result = await tx.queryObject`
       UPDATE traffic.payment_methods SET is_default = true
       WHERE id = ${paymentMethodId} AND organization_id = ${orgId}
-    `;
+    `
 
-    await tx.commit();
-    return (result.rowCount ?? 0) > 0;
+    await tx.commit()
+    return (result.rowCount ?? 0) > 0
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
 // ── Tax IDs ──────────────────────────────────────────────
 
-export async function listTaxIds(
-  pool: Pool,
-  orgId: number,
-): Promise<TaxIdResponse[]> {
-  const connection = await pool.connect();
+// Studio only renders at most one tax ID per org (see
+// `apps/studio/data/organizations/organization-tax-id-query.ts`), so we return
+// the newest row in the OpenAPI `{ tax_id: { country, type, value } | null }`
+// envelope. When no row exists we emit `{ tax_id: null }`.
+export async function listTaxIds(pool: Pool, orgId: number): Promise<TaxIdResponse> {
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject<TaxIdRow>`
       SELECT * FROM traffic.tax_ids
       WHERE organization_id = ${orgId}
       ORDER BY created_at DESC
-    `;
-    return result.rows.map(taxIdRowToResponse);
+      LIMIT 1
+    `
+    return taxIdRowToResponse(result.rows[0] ?? null)
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
@@ -474,50 +487,44 @@ export async function upsertTaxId(
   orgId: number,
   type: string,
   value: string,
+  country: string | null
 ): Promise<TaxIdResponse> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject<TaxIdRow>`
-      INSERT INTO traffic.tax_ids (organization_id, type, value)
-      VALUES (${orgId}, ${type}, ${value})
+      INSERT INTO traffic.tax_ids (organization_id, type, value, country)
+      VALUES (${orgId}, ${type}, ${value}, ${country})
       RETURNING *
-    `;
-    return taxIdRowToResponse(result.rows[0]);
+    `
+    return taxIdRowToResponse(result.rows[0])
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
-export async function deleteTaxId(
-  pool: Pool,
-  orgId: number,
-  taxIdId: number,
-): Promise<boolean> {
-  const connection = await pool.connect();
+export async function deleteTaxId(pool: Pool, orgId: number, taxIdId: number): Promise<boolean> {
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject`
       DELETE FROM traffic.tax_ids WHERE id = ${taxIdId} AND organization_id = ${orgId}
-    `;
-    return (result.rowCount ?? 0) > 0;
+    `
+    return (result.rowCount ?? 0) > 0
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
 // ── Credits ──────────────────────────────────────────────
 
-export async function getCreditBalance(
-  pool: Pool,
-  orgId: number,
-): Promise<number> {
-  const connection = await pool.connect();
+export async function getCreditBalance(pool: Pool, orgId: number): Promise<number> {
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject<CreditRow>`
       SELECT balance FROM traffic.credits WHERE organization_id = ${orgId}
-    `;
-    return result.rows.length > 0 ? Number(result.rows[0].balance) : 0;
+    `
+    return result.rows.length > 0 ? Number(result.rows[0].balance) : 0
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
@@ -525,12 +532,12 @@ export async function redeemCredits(
   pool: Pool,
   orgId: number,
   amount: number,
-  description: string,
+  description: string
 ): Promise<{ balance: number }> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
-    const tx = connection.createTransaction("redeem_credits");
-    await tx.begin();
+    const tx = connection.createTransaction('redeem_credits')
+    await tx.begin()
 
     await tx.queryObject`
       INSERT INTO traffic.credits (organization_id, balance)
@@ -538,33 +545,33 @@ export async function redeemCredits(
       ON CONFLICT (organization_id) DO UPDATE SET
         balance = traffic.credits.balance + ${amount},
         updated_at = now()
-    `;
+    `
 
     await tx.queryObject`
       INSERT INTO traffic.credit_transactions (organization_id, amount, type, description)
       VALUES (${orgId}, ${amount}, 'redeem', ${description})
-    `;
+    `
 
     const result = await tx.queryObject<CreditRow>`
       SELECT balance FROM traffic.credits WHERE organization_id = ${orgId}
-    `;
+    `
 
-    await tx.commit();
-    return { balance: Number(result.rows[0].balance) };
+    await tx.commit()
+    return { balance: Number(result.rows[0].balance) }
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
 export async function topUpCredits(
   pool: Pool,
   orgId: number,
-  amount: number,
+  amount: number
 ): Promise<{ balance: number }> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
-    const tx = connection.createTransaction("topup_credits");
-    await tx.begin();
+    const tx = connection.createTransaction('topup_credits')
+    await tx.begin()
 
     await tx.queryObject`
       INSERT INTO traffic.credits (organization_id, balance)
@@ -572,21 +579,21 @@ export async function topUpCredits(
       ON CONFLICT (organization_id) DO UPDATE SET
         balance = traffic.credits.balance + ${amount},
         updated_at = now()
-    `;
+    `
 
     await tx.queryObject`
       INSERT INTO traffic.credit_transactions (organization_id, amount, type, description)
-      VALUES (${orgId}, ${amount}, 'top_up', ${"Top-up of " + amount})
-    `;
+      VALUES (${orgId}, ${amount}, 'top_up', ${'Top-up of ' + amount})
+    `
 
     const result = await tx.queryObject<CreditRow>`
       SELECT balance FROM traffic.credits WHERE organization_id = ${orgId}
-    `;
+    `
 
-    await tx.commit();
-    return { balance: Number(result.rows[0].balance) };
+    await tx.commit()
+    return { balance: Number(result.rows[0].balance) }
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
@@ -596,50 +603,47 @@ export async function createUpgradeRequest(
   pool: Pool,
   orgId: number,
   requestedPlan: string,
-  note?: string,
+  note?: string
 ): Promise<{ id: number; status: string }> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject<{ id: number; status: string }>`
       INSERT INTO traffic.upgrade_requests (organization_id, requested_plan, note)
       VALUES (${orgId}, ${requestedPlan}, ${note ?? null})
       RETURNING id, status
-    `;
-    return result.rows[0];
+    `
+    return result.rows[0]
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
 // ── Project Addons ───────────────────────────────────────
 
-export async function getProjectAddons(
-  pool: Pool,
-  ref: string,
-): Promise<ProjectAddonsResponse> {
-  const connection = await pool.connect();
+export async function getProjectAddons(pool: Pool, ref: string): Promise<ProjectAddonsResponse> {
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject<ProjectAddonRow>`
       SELECT * FROM traffic.project_addons WHERE project_ref = ${ref}
-    `;
+    `
     const selectedAddons: SelectedAddon[] = result.rows.map((row) => ({
       type: row.addon_type,
       variant: {
         identifier: row.addon_variant,
         name: row.addon_variant,
         price: 0,
-        price_description: "",
-        price_interval: "monthly" as const,
-        price_type: "fixed" as const,
+        price_description: '',
+        price_interval: 'monthly' as const,
+        price_type: 'fixed' as const,
       },
-    }));
+    }))
     return {
       available_addons: [],
       ref,
       selected_addons: selectedAddons,
-    };
+    }
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
@@ -647,9 +651,9 @@ export async function applyProjectAddon(
   pool: Pool,
   ref: string,
   addonType: string,
-  addonVariant: string,
+  addonVariant: string
 ): Promise<ProjectAddonsResponse> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
     await connection.queryObject`
       INSERT INTO traffic.project_addons (project_ref, addon_type, addon_variant)
@@ -657,26 +661,26 @@ export async function applyProjectAddon(
       ON CONFLICT (project_ref, addon_type) DO UPDATE SET
         addon_variant = ${addonVariant},
         updated_at = now()
-    `;
+    `
   } finally {
-    connection.release();
+    connection.release()
   }
-  return getProjectAddons(pool, ref);
+  return getProjectAddons(pool, ref)
 }
 
 export async function removeProjectAddon(
   pool: Pool,
   ref: string,
-  addonVariant: string,
+  addonVariant: string
 ): Promise<boolean> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject`
       DELETE FROM traffic.project_addons
       WHERE project_ref = ${ref} AND addon_variant = ${addonVariant}
-    `;
-    return (result.rowCount ?? 0) > 0;
+    `
+    return (result.rowCount ?? 0) > 0
   } finally {
-    connection.release();
+    connection.release()
   }
 }

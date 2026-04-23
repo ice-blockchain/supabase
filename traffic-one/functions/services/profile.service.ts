@@ -146,3 +146,53 @@ export async function getProfileByGotrueId(
     connection.release();
   }
 }
+
+export async function updatePrimaryEmail(
+  pool: Pool,
+  gotrueId: string,
+  newEmail: string,
+  auditContext: { email: string; ip: string; method: string; route: string },
+): Promise<ProfileResponse> {
+  const connection = await pool.connect();
+  try {
+    const tx = connection.createTransaction("profile_update_email");
+    await tx.begin();
+
+    const updated = await tx.queryObject<ProfileRow>`
+      UPDATE traffic.profiles
+      SET primary_email = ${newEmail}, updated_at = now()
+      WHERE gotrue_id = ${gotrueId}
+      RETURNING *
+    `;
+
+    if (updated.rows.length === 0) {
+      await tx.rollback();
+      throw new Error("Profile not found");
+    }
+
+    const row = updated.rows[0];
+    const targetMetadata = {
+      old_email: auditContext.email,
+      new_email: newEmail,
+    };
+
+    await tx.queryObject`
+      INSERT INTO traffic.audit_logs (
+        id, profile_id, action_name, action_metadata,
+        actor_id, actor_type, actor_metadata,
+        target_description, target_metadata, occurred_at
+      ) VALUES (
+        gen_random_uuid(), ${row.id}, 'profile.email_updated',
+        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${gotrueId}, 'user',
+        ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
+        ${"profiles #" + row.id}, ${JSON.stringify(targetMetadata)}::jsonb, now()
+      )
+    `;
+
+    await tx.commit();
+    return rowToResponse(row);
+  } finally {
+    connection.release();
+  }
+}

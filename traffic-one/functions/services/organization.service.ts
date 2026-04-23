@@ -1,41 +1,44 @@
-import type { Pool } from "https://deno.land/x/postgres@v0.17.0/mod.ts";
+import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+
 import type {
+  CreateOrganizationBody,
   OrganizationResponse,
   OrganizationSlugResponse,
   UpdateOrganizationResponse,
-  CreateOrganizationBody,
-} from "../types/api.ts";
+} from '../types/api.ts'
 
 interface OrgRow {
-  id: number;
-  name: string;
-  slug: string;
-  billing_email: string | null;
-  opt_in_tags: string[];
-  mfa_enforced: boolean;
-  additional_billing_emails: string[];
-  plan_id: string;
-  plan_name: string;
-  created_at: string;
-  updated_at: string;
+  id: number
+  name: string
+  slug: string
+  billing_email: string | null
+  opt_in_tags: string[]
+  mfa_enforced: boolean
+  additional_billing_emails: string[]
+  plan_id: string
+  plan_name: string
+  created_at: string
+  updated_at: string
 }
 
 interface OrgWithRoleRow extends OrgRow {
-  role: string;
+  role: string
 }
 
-function generateSlugBase(name: string): string {
+export function generateSlugBase(name: string): string {
   return name
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48)
 }
 
 function randomSuffix(): string {
-  const bytes = new Uint8Array(3);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+  const bytes = new Uint8Array(3)
+  crypto.getRandomValues(bytes)
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
 }
 
 function rowToListResponse(row: OrgWithRoleRow): OrganizationResponse {
@@ -45,7 +48,7 @@ function rowToListResponse(row: OrgWithRoleRow): OrganizationResponse {
     slug: row.slug,
     billing_email: row.billing_email,
     billing_partner: null,
-    is_owner: row.role === "owner",
+    is_owner: row.role === 'owner',
     opt_in_tags: row.opt_in_tags ?? [],
     plan: { id: row.plan_id, name: row.plan_name },
     restriction_data: null,
@@ -56,7 +59,7 @@ function rowToListResponse(row: OrgWithRoleRow): OrganizationResponse {
     organization_missing_address: false,
     organization_missing_tax_id: false,
     organization_requires_mfa: row.mfa_enforced ?? false,
-  };
+  }
 }
 
 function rowToSlugResponse(row: OrgRow): OrganizationSlugResponse {
@@ -72,7 +75,7 @@ function rowToSlugResponse(row: OrgRow): OrganizationSlugResponse {
     restriction_status: null,
     usage_billing_enabled: false,
     has_oriole_project: false,
-  };
+  }
 }
 
 function rowToUpdateResponse(row: OrgRow): UpdateOrganizationResponse {
@@ -83,14 +86,14 @@ function rowToUpdateResponse(row: OrgRow): UpdateOrganizationResponse {
     billing_email: row.billing_email,
     opt_in_tags: row.opt_in_tags ?? [],
     stripe_customer_id: null,
-  };
+  }
 }
 
 export async function listOrganizations(
   pool: Pool,
-  profileId: number,
+  profileId: number
 ): Promise<OrganizationResponse[]> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject<OrgWithRoleRow>`
       SELECT o.*, m.role
@@ -98,30 +101,30 @@ export async function listOrganizations(
       JOIN traffic.organization_members m ON m.organization_id = o.id
       WHERE m.profile_id = ${profileId}
       ORDER BY o.created_at ASC
-    `;
-    return result.rows.map(rowToListResponse);
+    `
+    return result.rows.map(rowToListResponse)
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
 export async function getOrganizationBySlug(
   pool: Pool,
   slug: string,
-  profileId: number,
+  profileId: number
 ): Promise<OrganizationSlugResponse | null> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject<OrgRow>`
       SELECT o.*
       FROM traffic.organizations o
       JOIN traffic.organization_members m ON m.organization_id = o.id
       WHERE o.slug = ${slug} AND m.profile_id = ${profileId}
-    `;
-    if (result.rows.length === 0) return null;
-    return rowToSlugResponse(result.rows[0]);
+    `
+    if (result.rows.length === 0) return null
+    return rowToSlugResponse(result.rows[0])
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
@@ -130,40 +133,40 @@ export async function createOrganization(
   profileId: number,
   body: CreateOrganizationBody,
   gotrueId: string,
-  auditContext?: { email: string; ip: string; method: string; route: string },
+  auditContext?: { email: string; ip: string; method: string; route: string }
 ): Promise<OrganizationResponse> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
-    const tx = connection.createTransaction("create_organization");
-    await tx.begin();
+    const tx = connection.createTransaction('create_organization')
+    await tx.begin()
 
-    let slug = generateSlugBase(body.name);
-    if (!slug) slug = "org";
+    let slug = generateSlugBase(body.name)
+    if (!slug) slug = 'org'
 
     const existing = await tx.queryObject<{ count: number }>`
       SELECT COUNT(*)::int AS count FROM traffic.organizations WHERE slug = ${slug}
-    `;
+    `
     if (existing.rows[0].count > 0) {
-      slug = slug.slice(0, 42) + "-" + randomSuffix();
+      slug = slug.slice(0, 42) + '-' + randomSuffix()
     }
 
     const orgResult = await tx.queryObject<OrgRow>`
       INSERT INTO traffic.organizations (name, slug, billing_email)
       VALUES (${body.name}, ${slug}, NULL)
       RETURNING *
-    `;
-    const org = orgResult.rows[0];
+    `
+    const org = orgResult.rows[0]
 
     await tx.queryObject`
       INSERT INTO traffic.organization_members (organization_id, profile_id, role)
       VALUES (${org.id}, ${profileId}, 'owner')
-    `;
+    `
 
     await tx.queryObject`
       INSERT INTO traffic.organization_member_roles (organization_id, profile_id, role_id)
       VALUES (${org.id}, ${profileId}, 5)
       ON CONFLICT (organization_id, profile_id, role_id) DO NOTHING
-    `;
+    `
 
     if (auditContext) {
       await tx.queryObject`
@@ -176,12 +179,12 @@ export async function createOrganization(
           ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])}::jsonb,
           ${gotrueId}, 'user',
           ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
-          ${"organizations #" + org.id}, '{}'::jsonb, now()
+          ${'organizations #' + org.id}, '{}'::jsonb, now()
         )
-      `;
+      `
     }
 
-    await tx.commit();
+    await tx.commit()
 
     return {
       id: org.id,
@@ -200,9 +203,9 @@ export async function createOrganization(
       organization_missing_address: false,
       organization_missing_tax_id: false,
       organization_requires_mfa: org.mfa_enforced ?? false,
-    };
+    }
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
@@ -210,63 +213,68 @@ export async function updateOrganization(
   pool: Pool,
   slug: string,
   profileId: number,
-  updates: { name?: string; billing_email?: string; opt_in_tags?: string[]; additional_billing_emails?: string[] },
+  updates: {
+    name?: string
+    billing_email?: string
+    opt_in_tags?: string[]
+    additional_billing_emails?: string[]
+  },
   gotrueId: string,
-  auditContext?: { email: string; ip: string; method: string; route: string },
+  auditContext?: { email: string; ip: string; method: string; route: string }
 ): Promise<UpdateOrganizationResponse | null> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
-    const tx = connection.createTransaction("update_organization");
-    await tx.begin();
+    const tx = connection.createTransaction('update_organization')
+    await tx.begin()
 
     const membership = await tx.queryObject<{ organization_id: number }>`
       SELECT m.organization_id
       FROM traffic.organization_members m
       JOIN traffic.organizations o ON o.id = m.organization_id
       WHERE o.slug = ${slug} AND m.profile_id = ${profileId}
-    `;
+    `
     if (membership.rows.length === 0) {
-      await tx.rollback();
-      return null;
+      await tx.rollback()
+      return null
     }
-    const orgId = membership.rows[0].organization_id;
+    const orgId = membership.rows[0].organization_id
 
-    const setClauses: string[] = [];
-    const values: unknown[] = [];
-    let paramIdx = 1;
+    const setClauses: string[] = []
+    const values: unknown[] = []
+    let paramIdx = 1
 
     if (updates.name !== undefined) {
-      setClauses.push(`name = $${paramIdx++}`);
-      values.push(updates.name);
+      setClauses.push(`name = $${paramIdx++}`)
+      values.push(updates.name)
     }
     if (updates.billing_email !== undefined) {
-      setClauses.push(`billing_email = $${paramIdx++}`);
-      values.push(updates.billing_email);
+      setClauses.push(`billing_email = $${paramIdx++}`)
+      values.push(updates.billing_email)
     }
     if (updates.opt_in_tags !== undefined) {
-      setClauses.push(`opt_in_tags = $${paramIdx++}`);
-      values.push(updates.opt_in_tags);
+      setClauses.push(`opt_in_tags = $${paramIdx++}`)
+      values.push(updates.opt_in_tags)
     }
     if (updates.additional_billing_emails !== undefined) {
-      setClauses.push(`additional_billing_emails = $${paramIdx++}`);
-      values.push(updates.additional_billing_emails);
+      setClauses.push(`additional_billing_emails = $${paramIdx++}`)
+      values.push(updates.additional_billing_emails)
     }
 
-    setClauses.push(`updated_at = now()`);
+    setClauses.push(`updated_at = now()`)
 
     if (setClauses.length === 1) {
-      await tx.rollback();
+      await tx.rollback()
       const existing = await connection.queryObject<OrgRow>`
         SELECT * FROM traffic.organizations WHERE id = ${orgId}
-      `;
-      return rowToUpdateResponse(existing.rows[0]);
+      `
+      return rowToUpdateResponse(existing.rows[0])
     }
 
-    const setClause = setClauses.join(", ");
-    values.push(orgId);
-    const query = `UPDATE traffic.organizations SET ${setClause} WHERE id = $${paramIdx} RETURNING *`;
+    const setClause = setClauses.join(', ')
+    values.push(orgId)
+    const query = `UPDATE traffic.organizations SET ${setClause} WHERE id = $${paramIdx} RETURNING *`
 
-    const result = await tx.queryObject<OrgRow>({ text: query, args: values });
+    const result = await tx.queryObject<OrgRow>({ text: query, args: values })
 
     if (auditContext && result.rows.length > 0) {
       await tx.queryObject`
@@ -279,15 +287,15 @@ export async function updateOrganization(
           ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
           ${gotrueId}, 'user',
           ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
-          ${"organizations #" + result.rows[0].id}, '{}'::jsonb, now()
+          ${'organizations #' + result.rows[0].id}, '{}'::jsonb, now()
         )
-      `;
+      `
     }
 
-    await tx.commit();
-    return rowToUpdateResponse(result.rows[0]);
+    await tx.commit()
+    return rowToUpdateResponse(result.rows[0])
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
@@ -296,24 +304,24 @@ export async function deleteOrganization(
   slug: string,
   profileId: number,
   gotrueId: string,
-  auditContext?: { email: string; ip: string; method: string; route: string },
+  auditContext?: { email: string; ip: string; method: string; route: string }
 ): Promise<boolean> {
-  const connection = await pool.connect();
+  const connection = await pool.connect()
   try {
-    const tx = connection.createTransaction("delete_organization");
-    await tx.begin();
+    const tx = connection.createTransaction('delete_organization')
+    await tx.begin()
 
     const membership = await tx.queryObject<{ organization_id: number }>`
       SELECT m.organization_id
       FROM traffic.organization_members m
       JOIN traffic.organizations o ON o.id = m.organization_id
       WHERE o.slug = ${slug} AND m.profile_id = ${profileId} AND m.role = 'owner'
-    `;
+    `
     if (membership.rows.length === 0) {
-      await tx.rollback();
-      return false;
+      await tx.rollback()
+      return false
     }
-    const orgId = membership.rows[0].organization_id;
+    const orgId = membership.rows[0].organization_id
 
     if (auditContext) {
       await tx.queryObject`
@@ -326,25 +334,22 @@ export async function deleteOrganization(
           ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
           ${gotrueId}, 'user',
           ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
-          ${"organizations #" + orgId}, '{}'::jsonb, now()
+          ${'organizations #' + orgId}, '{}'::jsonb, now()
         )
-      `;
+      `
     }
 
-    await tx.queryObject`DELETE FROM traffic.organizations WHERE id = ${orgId}`;
+    await tx.queryObject`DELETE FROM traffic.organizations WHERE id = ${orgId}`
 
-    await tx.commit();
-    return true;
+    await tx.commit()
+    return true
   } finally {
-    connection.release();
+    connection.release()
   }
 }
 
-export async function getOrganizationMemberSlugs(
-  pool: Pool,
-  profileId: number,
-): Promise<string[]> {
-  const connection = await pool.connect();
+export async function getOrganizationMemberSlugs(pool: Pool, profileId: number): Promise<string[]> {
+  const connection = await pool.connect()
   try {
     const result = await connection.queryObject<{ slug: string }>`
       SELECT o.slug
@@ -352,9 +357,9 @@ export async function getOrganizationMemberSlugs(
       JOIN traffic.organization_members m ON m.organization_id = o.id
       WHERE m.profile_id = ${profileId}
       ORDER BY o.created_at ASC
-    `;
-    return result.rows.map((r) => r.slug);
+    `
+    return result.rows.map((r) => r.slug)
   } finally {
-    connection.release();
+    connection.release()
   }
 }
