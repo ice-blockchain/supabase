@@ -1,15 +1,14 @@
-import { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
 import { assert, assertEquals } from 'jsr:@std/assert@1'
 
 import 'jsr:@std/dotenv/load'
 
+import { createRetryingPool } from '../_helpers/pool.ts'
 import { getPermissions } from '../../functions/services/permission.service.ts'
 
-const pool = new Pool(Deno.env.get('TRAFFIC_DB_URL')!, 1, true)
+const pool = createRetryingPool(Deno.env.get('TRAFFIC_DB_URL')!)
 
 async function seedProfileAndOrg(roleId: number, suffix: string) {
-  const setup = await pool.connect()
-  try {
+  return await pool.withConnection(async (setup) => {
     const profile = await setup.queryObject<{ id: number }>`
       INSERT INTO traffic.profiles (gotrue_id, username, primary_email)
       VALUES (
@@ -44,24 +43,21 @@ async function seedProfileAndOrg(roleId: number, suffix: string) {
     `
 
     return { profileId, orgId, slug }
-  } finally {
-    setup.release()
-  }
+  })
 }
 
 async function cleanup(profileId: number | null, orgId: number | null) {
   try {
-    const conn = await pool.connect()
-    try {
+    await pool.withConnection(async (conn) => {
       if (orgId !== null) {
-        await conn.queryObject`DELETE FROM traffic.organizations WHERE id = ${orgId}`
+        await conn
+          .queryObject`DELETE FROM traffic.organizations WHERE id = ${orgId}`
       }
       if (profileId !== null) {
-        await conn.queryObject`DELETE FROM traffic.profiles WHERE id = ${profileId}`
+        await conn
+          .queryObject`DELETE FROM traffic.profiles WHERE id = ${profileId}`
       }
-    } finally {
-      conn.release()
-    }
+    })
   } catch {
     /* best-effort */
   }
@@ -73,11 +69,15 @@ function toRegexpString(actionOrResource: string) {
   return `^${actionOrResource.replace('.', '\\.').replace('%', '.*')}$`
 }
 
-function can(permissions: ReturnType<typeof emitted>, action: string, resource: string): boolean {
+function can(
+  permissions: ReturnType<typeof emitted>,
+  action: string,
+  resource: string,
+): boolean {
   const matching = permissions.filter(
     (p) =>
       p.actions.some((a) => action.match(toRegexpString(a))) &&
-      p.resources.some((r) => resource.match(toRegexpString(r)))
+      p.resources.some((r) => resource.match(toRegexpString(r))),
   )
   if (matching.length === 0) return false
   if (matching.some((p) => p.restrictive)) return false
@@ -93,7 +93,10 @@ type StudioPermission = {
   condition: null
 }
 
-function emitted(permissions: StudioPermission[], slug: string): StudioPermission[] {
+function emitted(
+  permissions: StudioPermission[],
+  slug: string,
+): StudioPermission[] {
   return permissions.filter((p) => p.organization_slug === slug)
 }
 
@@ -131,7 +134,7 @@ Deno.test('H5: Administrator (role 4) receives wildcard permissions', async () =
 
     const forOrg = emitted(
       (await getPermissions(pool, seed.profileId)) as StudioPermission[],
-      seed.slug
+      seed.slug,
     )
     assert(can(forOrg, 'create', 'organization_members'))
     assert(can(forOrg, 'billing_write', 'stripe.tax_ids'))
@@ -150,16 +153,16 @@ Deno.test('H5: Developer (role 3) cannot manage members or billing', async () =>
 
     const forOrg = emitted(
       (await getPermissions(pool, seed.profileId)) as StudioPermission[],
-      seed.slug
+      seed.slug,
     )
 
     assert(
       forOrg.some((p) => !p.restrictive && p.actions.includes('%')),
-      'developer should keep a wildcard allow entry'
+      'developer should keep a wildcard allow entry',
     )
     assert(
       forOrg.some((p) => p.restrictive),
-      'developer should emit restrictive entries'
+      'developer should emit restrictive entries',
     )
 
     // Allowed actions
@@ -169,12 +172,30 @@ Deno.test('H5: Developer (role 3) cannot manage members or billing', async () =>
     assert(can(forOrg, 'delete', 'functions'))
 
     // Denied admin/owner actions
-    assert(!can(forOrg, 'update', 'organizations'), 'developer may not update org settings')
-    assert(!can(forOrg, 'delete', 'organizations'), 'developer may not delete the org')
-    assert(!can(forOrg, 'create', 'organization_members'), 'developer may not invite members')
-    assert(!can(forOrg, 'update', 'organization_members'), 'developer may not change member roles')
-    assert(!can(forOrg, 'delete', 'organization_members'), 'developer may not remove members')
-    assert(!can(forOrg, 'billing_write', 'stripe.subscription'), 'developer may not edit billing')
+    assert(
+      !can(forOrg, 'update', 'organizations'),
+      'developer may not update org settings',
+    )
+    assert(
+      !can(forOrg, 'delete', 'organizations'),
+      'developer may not delete the org',
+    )
+    assert(
+      !can(forOrg, 'create', 'organization_members'),
+      'developer may not invite members',
+    )
+    assert(
+      !can(forOrg, 'update', 'organization_members'),
+      'developer may not change member roles',
+    )
+    assert(
+      !can(forOrg, 'delete', 'organization_members'),
+      'developer may not remove members',
+    )
+    assert(
+      !can(forOrg, 'billing_write', 'stripe.subscription'),
+      'developer may not edit billing',
+    )
   } finally {
     await cleanup(profileId, orgId)
   }
@@ -190,12 +211,19 @@ Deno.test('H5: Read-only (role 2) is limited to read actions', async () => {
 
     const forOrg = emitted(
       (await getPermissions(pool, seed.profileId)) as StudioPermission[],
-      seed.slug
+      seed.slug,
     )
 
-    assertEquals(forOrg.length, 1, 'read-only should emit a single allow entry')
+    assertEquals(
+      forOrg.length,
+      1,
+      'read-only should emit a single allow entry',
+    )
     assertEquals(forOrg[0].restrictive, false)
-    assert(!forOrg[0].actions.includes('%'), 'read-only must NOT receive wildcard actions')
+    assert(
+      !forOrg[0].actions.includes('%'),
+      'read-only must NOT receive wildcard actions',
+    )
 
     // Reads are allowed across the board
     assert(can(forOrg, 'read', 'projects'))
@@ -217,8 +245,7 @@ Deno.test('H5: Read-only (role 2) is limited to read actions', async () => {
 Deno.test('H5: profile with no orgs still receives the default slug entry', async () => {
   let profileId: number | null = null
   try {
-    const setup = await pool.connect()
-    try {
+    await pool.withConnection(async (setup) => {
       const profile = await setup.queryObject<{ id: number }>`
         INSERT INTO traffic.profiles (gotrue_id, username, primary_email)
         VALUES (
@@ -229,9 +256,7 @@ Deno.test('H5: profile with no orgs still receives the default slug entry', asyn
         RETURNING id
       `
       profileId = profile.rows[0].id
-    } finally {
-      setup.release()
-    }
+    })
 
     const permissions = (await getPermissions(pool, profileId!)) as StudioPermission[]
     assertEquals(permissions.length, 1)

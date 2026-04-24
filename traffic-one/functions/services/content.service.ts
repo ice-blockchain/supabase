@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 // ── Typed forbidden marker ─────────────────────────────────
 
@@ -236,7 +236,7 @@ export async function listContent(
   pool: Pool,
   projectRef: string,
   profileId: number,
-  opts: ContentListOptions
+  opts: ContentListOptions,
 ): Promise<{ rows: ContentItemRow[]; cursor: string | null }> {
   const limit = clampLimit(opts.limit)
   const offset = clampOffset(opts.offset)
@@ -295,7 +295,7 @@ export async function countContent(
   pool: Pool,
   projectRef: string,
   profileId: number,
-  opts: { type?: ContentType; name?: string }
+  opts: { type?: ContentType; name?: string },
 ): Promise<{ count: number; favorites: number; private: number; shared: number }> {
   const type = opts.type ?? null
   const nameFilter = opts.name && opts.name.length > 0 ? `%${opts.name}%` : null
@@ -341,7 +341,7 @@ export async function getContentById(
   pool: Pool,
   projectRef: string,
   profileId: number,
-  id: string
+  id: string,
 ): Promise<ContentItemRow | null> {
   const connection = await pool.connect()
   try {
@@ -371,7 +371,7 @@ export async function upsertContent(
   profileId: number,
   gotrueId: string,
   input: UpsertContentInput,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<ContentItemRow> {
   const connection = await pool.connect()
   try {
@@ -433,7 +433,9 @@ export async function upsertContent(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${projectOrgId}, ${actionName},
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'content #' + id + ' (project ' + projectRef + ')'},
@@ -465,7 +467,7 @@ export async function patchContent(
   gotrueId: string,
   id: string,
   patch: PatchContentInput,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<ContentItemRow | null> {
   const connection = await pool.connect()
   try {
@@ -525,7 +527,9 @@ export async function patchContent(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${projectOrgId}, 'project.content_updated',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'content #' + id + ' (project ' + projectRef + ')'}, '{}'::jsonb, now()
@@ -555,7 +559,7 @@ export async function deleteContentBulk(
   profileId: number,
   gotrueId: string,
   ids: string[],
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<{ deletedIds: string[] }> {
   if (ids.length === 0) return { deletedIds: [] }
 
@@ -580,7 +584,9 @@ export async function deleteContentBulk(
           target_description, target_metadata, occurred_at
         ) VALUES (
           gen_random_uuid(), ${profileId}, ${projectOrgId}, 'project.content_deleted',
-          ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+          ${
+        JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+      }::jsonb,
           ${gotrueId}, 'user',
           ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
           ${'content bulk delete (project ' + projectRef + '): ' + result.rows.length + ' items'},
@@ -602,7 +608,7 @@ export async function listRootFolder(
   pool: Pool,
   projectRef: string,
   profileId: number,
-  opts: ContentFolderListOptions
+  opts: ContentFolderListOptions,
 ): Promise<{
   folders: ContentFolderRow[]
   contents: ContentItemRow[]
@@ -661,7 +667,7 @@ export async function listFolderContents(
   projectRef: string,
   profileId: number,
   folderId: string,
-  opts: ContentFolderListOptions
+  opts: ContentFolderListOptions,
 ): Promise<{
   folder: ContentFolderRow | null
   folders: ContentFolderRow[]
@@ -738,7 +744,7 @@ export async function createFolder(
   gotrueId: string,
   name: string,
   parentId: string | null,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<ContentFolderRow> {
   const connection = await pool.connect()
   try {
@@ -774,7 +780,9 @@ export async function createFolder(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${projectOrgId}, 'project.content_folder_created',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'content folder #' + folder.id + ' (project ' + projectRef + ')'}, '{}'::jsonb, now()
@@ -798,7 +806,7 @@ export async function updateFolder(
   gotrueId: string,
   folderId: string,
   updates: { name?: string; parentId?: string | null },
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<ContentFolderRow | null> {
   const connection = await pool.connect()
   try {
@@ -870,7 +878,9 @@ export async function updateFolder(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${projectOrgId}, 'project.content_folder_updated',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'content folder #' + folder.id + ' (project ' + projectRef + ')'},
@@ -895,7 +905,7 @@ export async function deleteFoldersBulk(
   profileId: number,
   gotrueId: string,
   ids: string[],
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<{ deletedIds: string[] }> {
   if (ids.length === 0) return { deletedIds: [] }
 
@@ -920,10 +930,14 @@ export async function deleteFoldersBulk(
           target_description, target_metadata, occurred_at
         ) VALUES (
           gen_random_uuid(), ${profileId}, ${projectOrgId}, 'project.content_folder_deleted',
-          ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+          ${
+        JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+      }::jsonb,
           ${gotrueId}, 'user',
           ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
-          ${'content folder bulk delete (project ' + projectRef + '): ' + result.rows.length + ' items'},
+          ${
+        'content folder bulk delete (project ' + projectRef + '): ' + result.rows.length + ' items'
+      },
           ${JSON.stringify({ ids: result.rows.map((r) => r.id) })}::jsonb, now()
         )
       `

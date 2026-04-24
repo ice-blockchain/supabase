@@ -1,13 +1,14 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import {
+  type CustomHostnameRow,
   getCustomHostnameByRef,
   upsertInitializedCustomHostname,
-  type CustomHostnameRow,
 } from '../services/custom-hostnames.service.ts'
 import { getProjectByRef } from '../services/project.service.ts'
 import { getClientIp } from '../utils/client-ip.ts'
+import { assertValidRef } from '../utils/ref-validation.ts'
 
 const CUSTOM_HOSTNAME_UNSUPPORTED_MESSAGE =
   'Custom hostname activation is not available in self-hosted deployments'
@@ -27,7 +28,7 @@ function invalidBodyResponse(message = 'Invalid request body'): Response {
 function notSupportedResponse(message = CUSTOM_HOSTNAME_UNSUPPORTED_MESSAGE): Response {
   return Response.json(
     { code: 'self_hosted_unsupported', message },
-    { status: 501, headers: corsHeaders }
+    { status: 501, headers: corsHeaders },
   )
 }
 
@@ -62,7 +63,7 @@ async function emitInitializeAudit(
   gotrueId: string,
   projectRef: string,
   customHostname: string,
-  auditContext: { email: string; ip: string; method: string; route: string }
+  auditContext: { email: string; ip: string; method: string; route: string },
 ): Promise<void> {
   const connection = await pool.connect()
   try {
@@ -74,7 +75,9 @@ async function emitInitializeAudit(
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId},
         'project.custom_hostname_initialized',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'custom_hostnames (ref: ' + projectRef + ', hostname: ' + customHostname + ')'},
@@ -96,13 +99,17 @@ export async function handleCustomHostname(
   pool: Pool,
   profileId: number,
   gotrueId: string,
-  email: string
+  email: string,
 ): Promise<Response> {
   const match = path.match(/^\/([^/]+)\/custom-hostname(\/initialize|\/activate|\/reverify)?\/?$/)
   if (!match) return notFoundResponse()
 
   const ref = match[1]
   const action = match[2] ?? ''
+
+  // L4: malformed ref → 400 before DB lookup.
+  const bad = assertValidRef(ref)
+  if (bad) return bad
 
   const project = await getProjectByRef(pool, ref, profileId)
   if (!project) {
@@ -152,7 +159,7 @@ export async function handleCustomHostname(
       gotrueId,
       ref,
       hostname,
-      auditContext
+      auditContext,
     )
 
     return Response.json(toCustomHostnameResponse(row), { headers: corsHeaders })

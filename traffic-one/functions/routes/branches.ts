@@ -1,7 +1,8 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import {
+  type BranchRow,
   createBranch,
   getBranchById,
   listBranchesForProject,
@@ -10,12 +11,12 @@ import {
   resetBranch,
   restoreBranch,
   softDeleteBranch,
-  updateBranch,
-  type BranchRow,
   type TransitionOutcome,
+  updateBranch,
 } from '../services/branches.service.ts'
 import { getProjectByRef } from '../services/project.service.ts'
 import { getClientIp } from '../utils/client-ip.ts'
+import { assertValidRef } from '../utils/ref-validation.ts'
 
 // ── Response helpers ──────────────────────────────────────
 
@@ -96,13 +97,17 @@ export async function handleProjectBranches(
   pool: Pool,
   profileId: number,
   gotrueId: string,
-  email: string
+  email: string,
 ): Promise<Response> {
   const match = path.match(/^\/([^/]+)\/branches\/?$/)
   if (!match) {
     return notFoundResponse()
   }
   const ref = match[1]
+
+  // L4: malformed ref → 400 before DB lookup.
+  const bad = assertValidRef(ref)
+  if (bad) return bad
 
   const project = await getProjectByRef(pool, ref, profileId)
   if (!project) {
@@ -142,19 +147,20 @@ export async function handleProjectBranches(
         branchName,
         isDefault: typeof body.is_default === 'boolean' ? body.is_default : false,
         gitBranch: typeof body.git_branch === 'string' ? body.git_branch : null,
-        parentProjectRef:
-          typeof body.parent_project_ref === 'string' ? body.parent_project_ref : null,
+        parentProjectRef: typeof body.parent_project_ref === 'string'
+          ? body.parent_project_ref
+          : null,
         prNumber: typeof body.pr_number === 'number' ? body.pr_number : null,
       },
       gotrueId,
       project.organization_id,
-      auditContext
+      auditContext,
     )
 
     if (outcome.status === 'conflict') {
       return Response.json(
         { code: 'conflict', message: outcome.message },
-        { status: 409, headers: corsHeaders }
+        { status: 409, headers: corsHeaders },
       )
     }
 
@@ -181,7 +187,7 @@ export async function handleBranchById(
   pool: Pool,
   profileId: number,
   gotrueId: string,
-  email: string
+  email: string,
 ): Promise<Response> {
   const match = path.match(/^\/([^/]+)(\/.*)?$/)
   if (!match) return notFoundResponse()
@@ -225,7 +231,7 @@ export async function handleBranchById(
         schema_changes: [],
         data_changes: [],
       },
-      { headers: corsHeaders }
+      { headers: corsHeaders },
     )
   }
 
@@ -237,7 +243,7 @@ export async function handleBranchById(
       profileId,
       gotrueId,
       project.organization_id,
-      auditContext
+      auditContext,
     )
     return Response.json(transitionBody(outcome), {
       status: transitionStatus(outcome),
@@ -253,7 +259,7 @@ export async function handleBranchById(
       profileId,
       gotrueId,
       project.organization_id,
-      auditContext
+      auditContext,
     )
     return Response.json(transitionBody(outcome), {
       status: transitionStatus(outcome),
@@ -269,7 +275,7 @@ export async function handleBranchById(
       profileId,
       gotrueId,
       project.organization_id,
-      auditContext
+      auditContext,
     )
     return Response.json(transitionBody(outcome), {
       status: transitionStatus(outcome),
@@ -282,7 +288,7 @@ export async function handleBranchById(
     if (!branch.deleted_at) {
       return Response.json(
         { code: 'invalid_state', message: 'Branch is not deleted' },
-        { status: 409, headers: corsHeaders }
+        { status: 409, headers: corsHeaders },
       )
     }
     const restored = await restoreBranch(
@@ -291,7 +297,7 @@ export async function handleBranchById(
       profileId,
       gotrueId,
       project.organization_id,
-      auditContext
+      auditContext,
     )
     if (!restored) {
       return notFoundResponse('Branch not found')
@@ -326,29 +332,26 @@ export async function handleBranchById(
       {
         branchName: typeof body.branch_name === 'string' ? body.branch_name : undefined,
         isDefault: typeof body.is_default === 'boolean' ? body.is_default : undefined,
-        gitBranch:
-          typeof body.git_branch === 'string'
-            ? body.git_branch
-            : body.git_branch === null
-              ? null
-              : undefined,
-        parentProjectRef:
-          typeof body.parent_project_ref === 'string'
-            ? body.parent_project_ref
-            : body.parent_project_ref === null
-              ? null
-              : undefined,
-        prNumber:
-          typeof body.pr_number === 'number'
-            ? body.pr_number
-            : body.pr_number === null
-              ? null
-              : undefined,
+        gitBranch: typeof body.git_branch === 'string'
+          ? body.git_branch
+          : body.git_branch === null
+          ? null
+          : undefined,
+        parentProjectRef: typeof body.parent_project_ref === 'string'
+          ? body.parent_project_ref
+          : body.parent_project_ref === null
+          ? null
+          : undefined,
+        prNumber: typeof body.pr_number === 'number'
+          ? body.pr_number
+          : body.pr_number === null
+          ? null
+          : undefined,
       },
       profileId,
       gotrueId,
       project.organization_id,
-      auditContext
+      auditContext,
     )
 
     if (outcome.status === 'not_found') {
@@ -357,7 +360,7 @@ export async function handleBranchById(
     if (outcome.status === 'conflict') {
       return Response.json(
         { code: 'conflict', message: outcome.message },
-        { status: 409, headers: corsHeaders }
+        { status: 409, headers: corsHeaders },
       )
     }
     return Response.json(toBranchResponse(outcome.branch), {
@@ -375,7 +378,7 @@ export async function handleBranchById(
       profileId,
       gotrueId,
       project.organization_id,
-      auditContext
+      auditContext,
     )
     if (!deleted) {
       return notFoundResponse('Branch not found')

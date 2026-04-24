@@ -1,4 +1,6 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
+
+import type { ProjectBackend } from './project-backend.service.ts'
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -185,7 +187,7 @@ export async function listApiKeys(pool: Pool, projectRef: string): Promise<ApiKe
 export async function getApiKey(
   pool: Pool,
   projectRef: string,
-  id: number
+  id: number,
 ): Promise<ApiKey | null> {
   const connection = await pool.connect()
   try {
@@ -208,7 +210,7 @@ export async function createApiKey(
   organizationId: number,
   input: CreateApiKeyInput,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<ApiKey & { api_key: string }> {
   const plaintext = generateApiKey(input.type)
   const hash = await hashApiKey(plaintext)
@@ -239,7 +241,9 @@ export async function createApiKey(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, 'project.api_key_created',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'project_api_keys #' + row.id + ' (ref: ' + projectRef + ')'},
@@ -263,7 +267,7 @@ export async function updateApiKey(
   profileId: number,
   organizationId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<ApiKey | null> {
   const connection = await pool.connect()
   try {
@@ -294,7 +298,9 @@ export async function updateApiKey(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, 'project.api_key_updated',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'project_api_keys #' + row.id + ' (ref: ' + projectRef + ')'},
@@ -317,7 +323,7 @@ export async function deleteApiKey(
   profileId: number,
   organizationId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<ApiKey | null> {
   const connection = await pool.connect()
   try {
@@ -344,7 +350,9 @@ export async function deleteApiKey(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, 'project.api_key_revoked',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'project_api_keys #' + row.id + ' (ref: ' + projectRef + ')'},
@@ -360,16 +368,19 @@ export async function deleteApiKey(
   }
 }
 
-// Env-derived anon + service keys. The GET /api-keys/legacy endpoint returns
-// these read-only; they can't be mutated from the UI because self-hosted's
-// GoTrue / PostgREST read them from container env vars.
-export function listLegacyApiKeys(): LegacyApiKey[] {
-  const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? ''
-  const serviceKey =
-    Deno.env.get('SUPABASE_SERVICE_KEY') ?? Deno.env.get('SUPABASE_SECRET_KEY') ?? ''
+// Per-project anon + service keys. The GET /api-keys/legacy endpoint returns
+// these read-only; they can't be mutated from the UI because the project's
+// GoTrue / PostgREST read them from the provisioned secrets on startup.
+//
+// The `backend` argument carries the resolved `anonKey` / `serviceKey` for
+// the ref in question — Vault-decrypted when the orchestrator provisioned
+// them, or `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` env fallback
+// for shared-stack local mode. Either way the route handler never touches
+// `Deno.env` directly.
+export function listLegacyApiKeys(backend: ProjectBackend): LegacyApiKey[] {
   return [
-    { name: 'anon', api_key: anonKey, tags: 'anon,public' },
-    { name: 'service_role', api_key: serviceKey, tags: 'service_role' },
+    { name: 'anon', api_key: backend.anonKey ?? '', tags: 'anon,public' },
+    { name: 'service_role', api_key: backend.serviceKey ?? '', tags: 'service_role' },
   ]
 }
 
@@ -384,7 +395,7 @@ export async function createTemporaryApiKey(
   organizationId: number,
   input: CreateTemporaryApiKeyInput,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<TemporaryApiKeyResponse> {
   const ttlSeconds = Math.max(60, Math.min(3600, input.ttl_seconds ?? 600))
   const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString()
@@ -416,11 +427,21 @@ export async function createTemporaryApiKey(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, 'project.api_key_created',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'project_api_keys #' + inserted.rows[0].id + ' (ref: ' + projectRef + ', temporary)'},
-        ${JSON.stringify({ project_ref: projectRef, name, type: 'secret', temporary: true, expires_at: expiresAt })}::jsonb,
+        ${
+      JSON.stringify({
+        project_ref: projectRef,
+        name,
+        type: 'secret',
+        temporary: true,
+        expires_at: expiresAt,
+      })
+    }::jsonb,
         now()
       )
     `
@@ -458,7 +479,7 @@ export async function listSigningKeys(pool: Pool, projectRef: string): Promise<S
 export async function getSigningKey(
   pool: Pool,
   projectRef: string,
-  id: number
+  id: number,
 ): Promise<SigningKey | null> {
   const connection = await pool.connect()
   try {
@@ -476,7 +497,7 @@ export async function getSigningKey(
 
 function resolveSigningKeyStatus(
   input: { status?: SigningKeyStatus; active?: boolean },
-  fallback: SigningKeyStatus
+  fallback: SigningKeyStatus,
 ): SigningKeyStatus {
   if (input.status) return input.status
   if (input.active === true) return 'in_use'
@@ -494,7 +515,7 @@ export async function createSigningKey(
   organizationId: number,
   input: CreateSigningKeyInput,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<SigningKey> {
   const status = resolveSigningKeyStatus(input, 'standby')
 
@@ -532,7 +553,9 @@ export async function createSigningKey(
           target_description, target_metadata, occurred_at
         ) VALUES (
           gen_random_uuid(), ${profileId}, ${organizationId}, 'project.signing_key_rotated',
-          ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])}::jsonb,
+          ${
+        JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])
+      }::jsonb,
           ${gotrueId}, 'user',
           ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
           ${'project_jwt_signing_keys #' + row.id + ' (ref: ' + projectRef + ')'},
@@ -557,15 +580,15 @@ export async function updateSigningKey(
   organizationId: number,
   patch: UpdateSigningKeyInput,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<SigningKey | null> {
   const requestedStatus: SigningKeyStatus | null = patch.status
     ? patch.status
     : patch.active === true
-      ? 'in_use'
-      : patch.active === false
-        ? 'standby'
-        : null
+    ? 'in_use'
+    : patch.active === false
+    ? 'standby'
+    : null
 
   const connection = await pool.connect()
   try {
@@ -595,7 +618,9 @@ export async function updateSigningKey(
       UPDATE traffic.project_jwt_signing_keys
       SET algorithm = COALESCE(${patch.algorithm ?? null}, algorithm),
           status = COALESCE(${requestedStatus}, status),
-          public_jwk = COALESCE(${patch.public_jwk ? JSON.stringify(patch.public_jwk) : null}::jsonb, public_jwk),
+          public_jwk = COALESCE(${
+      patch.public_jwk ? JSON.stringify(patch.public_jwk) : null
+    }::jsonb, public_jwk),
           updated_at = now()
       WHERE project_ref = ${projectRef} AND id = ${id}
       RETURNING id, project_ref, algorithm, status, public_jwk,
@@ -611,11 +636,15 @@ export async function updateSigningKey(
           target_description, target_metadata, occurred_at
         ) VALUES (
           gen_random_uuid(), ${profileId}, ${organizationId}, 'project.signing_key_rotated',
-          ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+          ${
+        JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+      }::jsonb,
           ${gotrueId}, 'user',
           ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
           ${'project_jwt_signing_keys #' + row.id + ' (ref: ' + projectRef + ')'},
-          ${JSON.stringify({ project_ref: projectRef, algorithm: row.algorithm, status: row.status })}::jsonb,
+          ${
+        JSON.stringify({ project_ref: projectRef, algorithm: row.algorithm, status: row.status })
+      }::jsonb,
           now()
         )
       `
@@ -635,7 +664,7 @@ export async function deleteSigningKey(
   profileId: number,
   organizationId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<SigningKey | null> {
   const connection = await pool.connect()
   try {
@@ -662,7 +691,9 @@ export async function deleteSigningKey(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, 'project.signing_key_revoked',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'project_jwt_signing_keys #' + row.id + ' (ref: ' + projectRef + ')'},

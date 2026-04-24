@@ -1,7 +1,8 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import { getProjectByRef } from '../services/project.service.ts'
+import { assertValidRef } from '../utils/ref-validation.ts'
 
 const DISK_UNSUPPORTED_MESSAGE =
   'Disk configuration changes are not available in self-hosted deployments'
@@ -10,7 +11,7 @@ const RESIZE_UNSUPPORTED_MESSAGE = 'Project resize is not available in self-host
 function notSupportedResponse(message: string): Response {
   return Response.json(
     { code: 'self_hosted_unsupported', message },
-    { status: 501, headers: corsHeaders }
+    { status: 501, headers: corsHeaders },
   )
 }
 
@@ -108,7 +109,7 @@ export async function handleProjectDisk(
   path: string,
   method: string,
   pool: Pool,
-  profileId: number
+  profileId: number,
 ): Promise<Response> {
   const refMatch = path.match(/^\/([^/]+)(\/.*)?$/)
   if (!refMatch) {
@@ -117,6 +118,10 @@ export async function handleProjectDisk(
 
   const ref = refMatch[1]
   const subPath = refMatch[2] || ''
+
+  // L4: reject malformed refs before hitting the DB.
+  const bad = assertValidRef(ref)
+  if (bad) return bad
 
   const project = await getProjectByRef(pool, ref, profileId)
   if (!project) {
@@ -153,7 +158,7 @@ export async function handleProjectDisk(
           provisioned_iops: defaults.iops,
           provisioned_throughput_mbps: defaults.throughput_mbps,
         },
-        { headers: corsHeaders }
+        { headers: corsHeaders },
       )
     }
     if (method === 'POST') {

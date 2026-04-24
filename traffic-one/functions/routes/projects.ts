@@ -1,11 +1,20 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import {
-  FUNCTIONS_DIR,
-  parseFunctionDir,
   type FunctionEntry,
+  FUNCTIONS_DIR,
+  getRemoteFunction,
+  getRemoteFunctionBody,
+  listRemoteFunctions,
+  parseFunctionDir,
 } from '../services/edge-functions.service.ts'
+import {
+  getProjectBackend,
+  isSharedStack,
+  type ProjectBackend,
+  ProjectBackendNotProvisionedError,
+} from '../services/project-backend.service.ts'
 import {
   createProject,
   deleteProject,
@@ -19,6 +28,8 @@ import {
 } from '../services/project.service.ts'
 import { ProvisionerNotConfiguredError } from '../services/provisioners/api.provisioner.ts'
 import { getClientIp } from '../utils/client-ip.ts'
+import { notProvisionedResponse, resolveBackendOr501 } from '../utils/project-backend-response.ts'
+import { assertValidRef } from '../utils/ref-validation.ts'
 import { handleProjectBilling } from './billing.ts'
 import { handleProjectBranches } from './branches.ts'
 import { handleContent } from './content.ts'
@@ -40,7 +51,7 @@ export async function handleProjects(
   pool: Pool,
   profileId: number,
   gotrueId: string,
-  email: string
+  email: string,
 ): Promise<Response> {
   const ip = getClientIp(req)
   const auditContext = { email, ip, method, route: '/projects' + path }
@@ -51,7 +62,7 @@ export async function handleProjects(
     if (!body.name || !body.organization_slug) {
       return Response.json(
         { message: 'name and organization_slug are required' },
-        { status: 400, headers: corsHeaders }
+        { status: 400, headers: corsHeaders },
       )
     }
     try {
@@ -59,7 +70,7 @@ export async function handleProjects(
       if (!project) {
         return Response.json(
           { message: 'Organization not found or not a member' },
-          { status: 404, headers: corsHeaders }
+          { status: 404, headers: corsHeaders },
         )
       }
       return Response.json(project, { status: 201, headers: corsHeaders })
@@ -72,7 +83,7 @@ export async function handleProjects(
       if (err instanceof ProvisionerNotConfiguredError) {
         return Response.json(
           { code: err.code, message: err.message },
-          { status: 503, headers: corsHeaders }
+          { status: 503, headers: corsHeaders },
         )
       }
       throw err
@@ -83,6 +94,9 @@ export async function handleProjects(
   // now gates every request on project ownership via `profileId`.
   const billingMatch = path.match(/^\/([^/]+)(\/billing.*)$/)
   if (billingMatch && pool) {
+    // L4: malformed ref never corresponds to a real project → 400.
+    const bad = assertValidRef(billingMatch[1])
+    if (bad) return bad
     return handleProjectBilling(req, billingMatch[2], method, pool, billingMatch[1], profileId)
   }
 
@@ -104,9 +118,10 @@ export async function handleProjects(
   // /{ref}/db-password
   // /{ref}/notifications/advisor/exceptions
   if (
-    /^\/[^/]+\/config\/(postgrest|storage|realtime|pgbouncer(\/status)?|secrets(\/update-status)?)\/?$/.test(
-      path
-    ) ||
+    /^\/[^/]+\/config\/(postgrest|storage|realtime|pgbouncer(\/status)?|secrets(\/update-status)?)\/?$/
+      .test(
+        path,
+      ) ||
     /^\/[^/]+\/settings\/sensitivity\/?$/.test(path) ||
     /^\/[^/]+\/db-password\/?$/.test(path) ||
     /^\/[^/]+\/notifications\/advisor\/exceptions\/?$/.test(path)
@@ -156,6 +171,9 @@ export async function handleProjects(
   const refOnlyMatch = path.match(/^\/([^/]+)$/)
   if (method === 'GET' && refOnlyMatch) {
     const ref = refOnlyMatch[1]
+    // L4: malformed ref → 400, not 404 (can't possibly match a real row).
+    const bad = assertValidRef(ref)
+    if (bad) return bad
     const project = await getProjectByRef(pool, ref, profileId)
     if (!project) {
       return Response.json({ message: 'Project not found' }, { status: 404, headers: corsHeaders })
@@ -166,6 +184,9 @@ export async function handleProjects(
   // PATCH /projects/{ref} — update project
   if (method === 'PATCH' && refOnlyMatch) {
     const ref = refOnlyMatch[1]
+    // L4: malformed ref → 400.
+    const bad = assertValidRef(ref)
+    if (bad) return bad
     const body = await req.json()
     const result = await updateProject(
       pool,
@@ -173,7 +194,7 @@ export async function handleProjects(
       profileId,
       { name: body.name },
       gotrueId,
-      auditContext
+      auditContext,
     )
     if (!result) {
       return Response.json({ message: 'Project not found' }, { status: 404, headers: corsHeaders })
@@ -184,6 +205,9 @@ export async function handleProjects(
   // DELETE /projects/{ref} — delete project
   if (method === 'DELETE' && refOnlyMatch) {
     const ref = refOnlyMatch[1]
+    // L4: malformed ref → 400.
+    const bad = assertValidRef(ref)
+    if (bad) return bad
     const result = await deleteProject(pool, ref, profileId, gotrueId, auditContext)
     if (!result) {
       return Response.json({ message: 'Project not found' }, { status: 404, headers: corsHeaders })
@@ -197,6 +221,12 @@ export async function handleProjects(
     const ref = subMatch[1]
     const subPath = subMatch[2]
 
+    // L4: every sub-resource branch below uses `ref` to authorize against
+    // `traffic.projects`. A malformed ref can never match a real row, so
+    // short-circuit before any further work.
+    const bad = assertValidRef(ref)
+    if (bad) return bad
+
     // POST /{ref}/pause
     if (method === 'POST' && subPath === '/pause') {
       const result = await setProjectStatus(
@@ -205,12 +235,12 @@ export async function handleProjects(
         profileId,
         'INACTIVE',
         gotrueId,
-        auditContext
+        auditContext,
       )
       if (!result) {
         return Response.json(
           { message: 'Project not found' },
-          { status: 404, headers: corsHeaders }
+          { status: 404, headers: corsHeaders },
         )
       }
       return Response.json(result, { headers: corsHeaders })
@@ -224,12 +254,12 @@ export async function handleProjects(
         profileId,
         'ACTIVE_HEALTHY',
         gotrueId,
-        auditContext
+        auditContext,
       )
       if (!result) {
         return Response.json(
           { message: 'Project not found' },
-          { status: 404, headers: corsHeaders }
+          { status: 404, headers: corsHeaders },
         )
       }
       return Response.json(result, { headers: corsHeaders })
@@ -252,7 +282,7 @@ export async function handleProjects(
         pool,
         ref,
         profileId,
-        body.target_organization_slug
+        body.target_organization_slug,
       )
       // H6: preview returns `valid: false` for non-members (404) and
       // admin/owner-only forbiddens (403). Map explicitly so Studio sees the
@@ -272,7 +302,7 @@ export async function handleProjects(
         profileId,
         body.target_organization_slug,
         gotrueId,
-        auditContext
+        auditContext,
       )
       // H6: only admins and owners (role_id >= 4) may trigger a transfer.
       // Return 403 when the caller is a member without the required role;
@@ -280,7 +310,7 @@ export async function handleProjects(
       if (result.ok === false && result.forbidden) {
         return Response.json(
           { message: 'Only administrators and owners can transfer projects' },
-          { status: 403, headers: corsHeaders }
+          { status: 403, headers: corsHeaders },
         )
       }
       if (result.ok === false) {
@@ -297,7 +327,7 @@ export async function handleProjects(
         if (!status) {
           return Response.json(
             { message: 'Project not found' },
-            { status: 404, headers: corsHeaders }
+            { status: 404, headers: corsHeaders },
           )
         }
         return Response.json(status, { headers: corsHeaders })
@@ -309,7 +339,7 @@ export async function handleProjects(
         if (!status) {
           return Response.json(
             { message: 'Project not found' },
-            { status: 404, headers: corsHeaders }
+            { status: 404, headers: corsHeaders },
           )
         }
         return Response.json(status, { headers: corsHeaders })
@@ -344,21 +374,53 @@ export async function handleProjects(
         '/integrations': [],
       }
 
-      // Dynamic: /config/supavisor — return pooler configuration from env vars
+      // Dynamic: /config/supavisor — return pooler configuration resolved
+      // from the per-project backend.
+      //
+      // H2: this used to read `POOLER_*` + `POSTGRES_DB` directly from the
+      // function's env without verifying the caller is a member of {ref}'s
+      // org. In per-project mode (api provisioner) that leaked the shared
+      // local-stack pooler coordinates to anyone who could guess a ref,
+      // AND it reported the wrong connection string for non-local projects
+      // (pooler is global → `supabase-pooler:6543` is only correct for
+      // Docker-local). We now:
+      //   1. Gate on `getProjectByRef` so non-members (or unknown refs)
+      //      return a plain 404 — consistent with every other project
+      //      handler and preventing cross-tenant enumeration.
+      //   2. Resolve the backend via `getProjectBackend` so the db name,
+      //      host, and port all come from the project's own row / Vault
+      //      / env-fallback chain rather than the platform-global
+      //      `POSTGRES_DB`. The pooler hostname and transaction port stay
+      //      on the `POOLER_*` env vars because Supavisor is currently
+      //      shared across tenants in both local and api modes; when that
+      //      changes we'll add `pooler_*` columns to `traffic.projects`.
       if (subPath === '/config/supavisor') {
+        const project = await getProjectByRef(pool, ref, profileId)
+        if (!project) {
+          return Response.json(
+            { message: 'Project not found' },
+            { status: 404, headers: corsHeaders },
+          )
+        }
+
+        const backendResult = await resolveBackendOr501(pool, ref)
+        if (backendResult instanceof Response) return backendResult
+        const backend = backendResult
+
         const tenantId = Deno.env.get('POOLER_TENANT_ID') || ref
         const poolSize = parseInt(Deno.env.get('POOLER_DEFAULT_POOL_SIZE') || '20', 10)
         const maxClientConn = parseInt(Deno.env.get('POOLER_MAX_CLIENT_CONN') || '100', 10)
         const txPort = parseInt(Deno.env.get('POOLER_PROXY_PORT_TRANSACTION') || '6543', 10)
-        const dbName = Deno.env.get('POSTGRES_DB') || 'postgres'
 
         const supavisorConfig = [
           {
-            connection_string: `postgres://postgres.[${tenantId}]@supabase-pooler:${txPort}/${dbName}`,
-            connectionString: `postgres://postgres.[${tenantId}]@supabase-pooler:${txPort}/${dbName}`,
+            connection_string:
+              `postgres://postgres.[${tenantId}]@supabase-pooler:${txPort}/${backend.dbName}`,
+            connectionString:
+              `postgres://postgres.[${tenantId}]@supabase-pooler:${txPort}/${backend.dbName}`,
             database_type: 'PRIMARY',
             db_host: 'supabase-pooler',
-            db_name: dbName,
+            db_name: backend.dbName,
             db_port: txPort,
             db_user: `postgres.${tenantId}`,
             default_pool_size: poolSize,
@@ -393,7 +455,7 @@ export async function handleProjectHealth(
   pool: Pool,
   profileId: number,
   gotrueId: string,
-  email: string
+  email: string,
 ): Promise<Response> {
   // ── Wave 3 v1 dispatches ───────────────────────────────────
   // Bundle E: api-keys CRUD + /api-keys/legacy + JWT signing keys
@@ -460,6 +522,9 @@ export async function handleProjectHealth(
   const healthMatch = path.match(/^\/([^/]+)\/health$/)
   if (method === 'GET' && healthMatch) {
     const ref = healthMatch[1]
+    // L4: malformed ref → 400.
+    const bad = assertValidRef(ref)
+    if (bad) return bad
     const status = await getProjectStatus(pool, ref, profileId)
     if (!status) {
       return Response.json({ message: 'Project not found' }, { status: 404, headers: corsHeaders })
@@ -476,7 +541,7 @@ export async function handleProjectHealth(
         { name: 'storage', status: svcStatus },
         { name: 'db', status: svcStatus },
       ],
-      { headers: corsHeaders }
+      { headers: corsHeaders },
     )
   }
 
@@ -484,24 +549,42 @@ export async function handleProjectHealth(
   // /{ref}/api-keys is now handled by handleProjectApiKeys (Bundle E) above;
   // the legacy env-derived anon/service_role list lives at /{ref}/api-keys/legacy.
 
-  // GET /{ref}/functions — list edge functions from disk
+  // GET /{ref}/functions — list edge functions.
+  //
+  // Shared-stack mode (local Docker): read them off the filesystem mount.
+  // Per-project mode (api provisioner): proxy to the project's functions
+  // runtime via `${backend.functionsApiUrl}/_meta` using the per-project
+  // service key.
   const functionsListMatch = path.match(/^\/([^/]+)\/functions\/?$/)
   if (method === 'GET' && functionsListMatch) {
-    return listEdgeFunctions()
+    const functionsRef = functionsListMatch[1]
+    const resolved = await resolveFunctionsBackend(pool, functionsRef, profileId)
+    if (resolved instanceof Response) return resolved
+    return isSharedStack(resolved) ? listEdgeFunctions() : listRemoteFunctionsResponse(resolved)
   }
 
   // GET /{ref}/functions/{slug} — single function detail
   const functionDetailMatch = path.match(/^\/([^/]+)\/functions\/([^/]+)\/?$/)
   if (method === 'GET' && functionDetailMatch) {
+    const functionsRef = functionDetailMatch[1]
     const slug = functionDetailMatch[2]
-    return getEdgeFunctionBySlug(slug)
+    const resolved = await resolveFunctionsBackend(pool, functionsRef, profileId)
+    if (resolved instanceof Response) return resolved
+    return isSharedStack(resolved)
+      ? getEdgeFunctionBySlug(slug)
+      : getRemoteFunctionResponse(resolved, slug)
   }
 
   // GET /{ref}/functions/{slug}/body — function source code
   const functionBodyMatch = path.match(/^\/([^/]+)\/functions\/([^/]+)\/body$/)
   if (method === 'GET' && functionBodyMatch) {
+    const functionsRef = functionBodyMatch[1]
     const slug = functionBodyMatch[2]
-    return getEdgeFunctionBody(slug)
+    const resolved = await resolveFunctionsBackend(pool, functionsRef, profileId)
+    if (resolved instanceof Response) return resolved
+    return isSharedStack(resolved)
+      ? getEdgeFunctionBody(slug)
+      : getRemoteFunctionBodyResponse(resolved, slug)
   }
 
   return Response.json({ message: 'Not found' }, { status: 404, headers: corsHeaders })
@@ -569,4 +652,69 @@ async function getEdgeFunctionBody(slug: string): Promise<Response> {
   } catch {
     return Response.json({ message: 'Function not found' }, { status: 404, headers: corsHeaders })
   }
+}
+
+// Resolve the functions backend for a ref, bubbling missing-provisioner
+// state up as a 501 response. Shared across the three GET handlers so the
+// dispatcher stays flat.
+//
+// C1: IDOR blocker. Every call site must pass `profileId` so we can verify
+// the caller is a member of the project's organization before we reach into
+// the per-project `endpoint` / `serviceKey`. Without this gate, any
+// authenticated user could enumerate/read edge-function metadata across
+// tenants by guessing refs. `getProjectByRef` returns `null` for non-members
+// and we translate that into a 404 (same shape as the rest of the project
+// routes, so we don't leak existence of unrelated refs).
+async function resolveFunctionsBackend(
+  pool: Pool,
+  ref: string,
+  profileId: number,
+): Promise<ProjectBackend | Response> {
+  // L4: reject malformed refs before any DB work. All three edge-function
+  // GET handlers (list / detail / body) funnel through here, so putting
+  // the check in one place is enough to cover `GET /{ref}/functions*`.
+  const bad = assertValidRef(ref)
+  if (bad) return bad
+  const project = await getProjectByRef(pool, ref, profileId)
+  if (!project) {
+    return Response.json({ message: 'Project not found' }, { status: 404, headers: corsHeaders })
+  }
+  try {
+    return await getProjectBackend(ref, pool)
+  } catch (err) {
+    if (err instanceof ProjectBackendNotProvisionedError) {
+      return notProvisionedResponse(err)
+    }
+    throw err
+  }
+}
+
+async function listRemoteFunctionsResponse(backend: ProjectBackend): Promise<Response> {
+  const functions = await listRemoteFunctions(backend)
+  return Response.json(functions, { headers: corsHeaders })
+}
+
+async function getRemoteFunctionResponse(backend: ProjectBackend, slug: string): Promise<Response> {
+  if (slug === 'main' || slug === 'traffic-one') {
+    return Response.json({ message: 'Function not found' }, { status: 404, headers: corsHeaders })
+  }
+  const entry = await getRemoteFunction(backend, slug)
+  if (!entry) {
+    return Response.json({ message: 'Function not found' }, { status: 404, headers: corsHeaders })
+  }
+  return Response.json(entry, { headers: corsHeaders })
+}
+
+async function getRemoteFunctionBodyResponse(
+  backend: ProjectBackend,
+  slug: string,
+): Promise<Response> {
+  if (slug === 'main' || slug === 'traffic-one') {
+    return Response.json({ message: 'Function not found' }, { status: 404, headers: corsHeaders })
+  }
+  const files = await getRemoteFunctionBody(backend, slug)
+  if (!files) {
+    return Response.json({ message: 'Function not found' }, { status: 404, headers: corsHeaders })
+  }
+  return Response.json(files, { headers: corsHeaders })
 }

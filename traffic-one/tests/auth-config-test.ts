@@ -1,4 +1,4 @@
-import { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 import { assert, assertEquals, assertExists } from 'jsr:@std/assert@1'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
@@ -7,7 +7,11 @@ import 'jsr:@std/dotenv/load'
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!
 const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
 })
 
 const AUTH_URL = `${supabaseUrl}/api/platform/auth`
@@ -27,7 +31,9 @@ async function getTestSession() {
     password: 'test-password',
   })
   if (error || !session) {
-    throw new Error(`Failed to sign in test user: ${error?.message ?? 'no session'}`)
+    throw new Error(
+      `Failed to sign in test user: ${error?.message ?? 'no session'}`,
+    )
   }
   return session
 }
@@ -121,7 +127,10 @@ Deno.test('setup: create test project for auth-config', async () => {
 
 Deno.test('GET /auth/{unknown-ref}/config returns 404', async () => {
   const session = await getTestSession()
-  const res = await fetch(`${AUTH_URL}/nonexistent00000000/config`, {
+  // L4: must be 20 lowercase-alphanumeric chars to reach the DB branch;
+  // a shorter ref (like the 19-char `nonexistent00000000` this used to pass)
+  // would now return 400 `invalid_project_ref` from `assertValidRef`.
+  const res = await fetch(`${AUTH_URL}/nonexistent000000000/config`, {
     headers: authHeaders(session.access_token),
   })
   assertEquals(res.status, 404)
@@ -199,7 +208,10 @@ Deno.test('GET /auth/{ref}/config returns object with required keys', async () =
   assertEquals(typeof config.HOOK_MFA_VERIFICATION_ATTEMPT_ENABLED, 'boolean')
   assertEquals(typeof config.HOOK_MFA_VERIFICATION_ATTEMPT_URI, 'string')
   assertEquals(typeof config.HOOK_MFA_VERIFICATION_ATTEMPT_SECRETS, 'string')
-  assertEquals(typeof config.HOOK_PASSWORD_VERIFICATION_ATTEMPT_ENABLED, 'boolean')
+  assertEquals(
+    typeof config.HOOK_PASSWORD_VERIFICATION_ATTEMPT_ENABLED,
+    'boolean',
+  )
   assertEquals(typeof config.HOOK_SEND_SMS_ENABLED, 'boolean')
   assertEquals(typeof config.HOOK_SEND_SMS_URI, 'string')
   assertEquals(typeof config.HOOK_SEND_SMS_SECRETS, 'string')
@@ -240,7 +252,10 @@ Deno.test('GET /auth/{ref}/config redacts secret fields', async () => {
   assertEquals(config.HOOK_CUSTOM_ACCESS_TOKEN_SECRETS, '***')
 
   // Empty secrets must read as "" not "***"
-  assert(config.EXTERNAL_GOOGLE_SECRET === '' || config.EXTERNAL_GOOGLE_SECRET === '***')
+  assert(
+    config.EXTERNAL_GOOGLE_SECRET === '' ||
+      config.EXTERNAL_GOOGLE_SECRET === '***',
+  )
 })
 
 // ── PATCH persistence ────────────────────────────────────
@@ -302,7 +317,7 @@ Deno.test('PATCH /auth/{ref}/config/hooks persists hook URLs', async () => {
   assertEquals(patched.HOOK_CUSTOM_ACCESS_TOKEN_ENABLED, true)
   assertEquals(
     patched.HOOK_CUSTOM_ACCESS_TOKEN_URI,
-    'pg-functions://postgres/public/custom_access_token_hook'
+    'pg-functions://postgres/public/custom_access_token_hook',
   )
 
   const res = await fetch(`${AUTH_URL}/${testRef}/config`, {

@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import {
@@ -18,7 +18,7 @@ export async function handleNotifications(
   pool: Pool,
   gotrueId: string,
   email: string,
-  profileId: number
+  profileId: number,
 ): Promise<Response> {
   const ip = getClientIp(req)
   // L1: this handler was originally mounted under `/profile/notifications` and
@@ -53,7 +53,7 @@ export async function handleNotifications(
         if (!entry?.id || !entry?.status) {
           return Response.json(
             { message: 'each entry must have id and status' },
-            { status: 400, headers: corsHeaders }
+            { status: 400, headers: corsHeaders },
           )
         }
         const group = byStatus.get(entry.status)
@@ -71,7 +71,7 @@ export async function handleNotifications(
           ids,
           status as NotificationStatus,
           gotrueId,
-          auditContext
+          auditContext,
         )
         allUpdated.push(...updated)
       }
@@ -81,7 +81,7 @@ export async function handleNotifications(
     if (!body.ids || !body.status) {
       return Response.json(
         { message: 'ids and status are required' },
-        { status: 400, headers: corsHeaders }
+        { status: 400, headers: corsHeaders },
       )
     }
     const updated = await bulkUpdateNotificationStatus(
@@ -90,7 +90,7 @@ export async function handleNotifications(
       body.ids,
       body.status,
       gotrueId,
-      auditContext
+      auditContext,
     )
     return Response.json(updated, { headers: corsHeaders })
   }
@@ -108,12 +108,12 @@ export async function handleNotifications(
       notifId,
       body.status,
       gotrueId,
-      auditContext
+      auditContext,
     )
     if (!updated) {
       return Response.json(
         { message: 'Notification not found' },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders },
       )
     }
     return Response.json(updated, { headers: corsHeaders })
@@ -124,6 +124,6 @@ export async function handleNotifications(
     {
       status: 405,
       headers: corsHeaders,
-    }
+    },
   )
 }

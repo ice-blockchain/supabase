@@ -1,11 +1,11 @@
-import { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
-import { assert, assertEquals, assertRejects } from 'jsr:@std/assert@1'
+import { assert, assertEquals } from 'jsr:@std/assert@1'
 
 import 'jsr:@std/dotenv/load'
 
+import { createRetryingPool } from '../_helpers/pool.ts'
 import {
   applyConfigPatch,
-  buildServiceRoleJwt,
+  type FetchLike,
   fetchLiveSettings,
   getDefaultConfig,
   getMergedConfig,
@@ -13,37 +13,59 @@ import {
   isSecretField,
   pushLiveConfig,
   upsertOverrides,
-  type FetchLike,
 } from '../../functions/services/gotrue-admin.service.ts'
+import type { ProjectBackend } from '../../functions/services/project-backend.service.ts'
 
-const pool = new Pool(Deno.env.get('TRAFFIC_DB_URL')!, 1, true)
+const pool = createRetryingPool(Deno.env.get('TRAFFIC_DB_URL')!)
 
 function freshRef(suffix: string): string {
   return `test-gac-${suffix}-${crypto.randomUUID().slice(0, 8)}`
 }
 
-async function cleanupOverrides(projectRef: string) {
-  const connection = await pool.connect()
-  try {
-    await connection.queryObject`
-      DELETE FROM traffic.auth_config_overrides WHERE project_ref = ${projectRef}
-    `
-  } finally {
-    connection.release()
+// Per-test projection of ProjectBackend — only the fields the admin-service
+// functions actually touch (endpoint + serviceKey + ref). Everything else is
+// filled with benign values so the type-checker is satisfied without pulling
+// in a real DB row.
+function fakeBackend(
+  ref: string,
+  overrides: Partial<ProjectBackend> = {},
+): ProjectBackend {
+  return {
+    ref,
+    endpoint: 'http://gotrue-admin.test',
+    anonKey: 'anon-key',
+    serviceKey: 'service-key',
+    pgMetaUrl: 'http://meta.test',
+    logflareUrl: 'http://logflare.test',
+    logflareToken: '',
+    dbHost: 'db',
+    externalDbHost: 'db',
+    dbPort: 5432,
+    dbUser: 'postgres',
+    dbPass: 'pg',
+    dbName: 'postgres',
+    connectionString: 'postgresql://postgres:pg@db:5432/postgres',
+    functionsApiUrl: 'http://functions.test/functions/v1',
+    ...overrides,
   }
 }
 
+async function cleanupOverrides(projectRef: string) {
+  await pool.withConnection(async (connection) => {
+    await connection.queryObject`
+      DELETE FROM traffic.auth_config_overrides WHERE project_ref = ${projectRef}
+    `
+  })
+}
+
 async function countOverrides(projectRef: string): Promise<number> {
-  const connection = await pool.connect()
-  try {
+  return await pool.withConnection(async (connection) => {
     const res = await connection.queryObject<{ count: number }>`
       SELECT COUNT(*)::int AS count FROM traffic.auth_config_overrides
       WHERE project_ref = ${projectRef}
     `
     return res.rows[0].count
-  } finally {
-    connection.release()
-  }
+  })
 }
 
 // ── Pure functions ───────────────────────────────────────
@@ -131,7 +153,7 @@ Deno.test('upsertOverrides + getOverrides round-trip for mixed value types', asy
         RATE_LIMIT_EMAIL_SENT: 100,
       },
       '',
-      0
+      0,
     )
 
     const overrides = await getOverrides(pool, ref)
@@ -150,8 +172,20 @@ Deno.test(
   async () => {
     const ref = freshRef('idempotent')
     try {
-      await upsertOverrides(pool, ref, { SITE_URL: 'https://first.example.com' }, '', 0)
-      await upsertOverrides(pool, ref, { SITE_URL: 'https://second.example.com' }, '', 0)
+      await upsertOverrides(
+        pool,
+        ref,
+        { SITE_URL: 'https://first.example.com' },
+        '',
+        0,
+      )
+      await upsertOverrides(
+        pool,
+        ref,
+        { SITE_URL: 'https://second.example.com' },
+        '',
+        0,
+      )
 
       const overrides = await getOverrides(pool, ref)
       assertEquals(overrides.SITE_URL, 'https://second.example.com')
@@ -161,8 +195,12 @@ Deno.test(
     } finally {
       await cleanupOverrides(ref)
     }
-  }
+  },
 )
+
+// A fetch that always 404s — lets getMergedConfig tests ignore live settings
+// without hitting GoTrue (and without a real network call).
+const fetchAlways404: FetchLike = () => Promise.resolve(new Response('not found', { status: 404 }))
 
 Deno.test('getMergedConfig layers overrides on top of defaults', async () => {
   const ref = freshRef('merge')
@@ -172,16 +210,23 @@ Deno.test('getMergedConfig layers overrides on top of defaults', async () => {
       ref,
       { SITE_URL: 'https://merged.example.com', DISABLE_SIGNUP: true },
       '',
-      0
+      0,
     )
 
     const defaults = getDefaultConfig()
-    const merged = await getMergedConfig(pool, ref)
+    const merged = await getMergedConfig(
+      pool,
+      fakeBackend(ref),
+      fetchAlways404,
+    )
 
     assertEquals(merged.SITE_URL, 'https://merged.example.com')
     assertEquals(merged.DISABLE_SIGNUP, true)
     assertEquals(merged.JWT_EXP, defaults.JWT_EXP)
-    assertEquals(merged.EXTERNAL_EMAIL_ENABLED, defaults.EXTERNAL_EMAIL_ENABLED)
+    assertEquals(
+      merged.EXTERNAL_EMAIL_ENABLED,
+      defaults.EXTERNAL_EMAIL_ENABLED,
+    )
 
     assert(Object.keys(merged).length >= Object.keys(defaults).length)
   } finally {
@@ -202,10 +247,14 @@ Deno.test('getMergedConfig redacts secret fields', async () => {
         HOOK_SEND_EMAIL_SECRETS: 'plaintext-hook-secret',
       },
       '',
-      0
+      0,
     )
 
-    const merged = await getMergedConfig(pool, ref)
+    const merged = await getMergedConfig(
+      pool,
+      fakeBackend(ref),
+      fetchAlways404,
+    )
     assertEquals(merged.SMTP_PASS, '***')
     assertEquals(merged.SECURITY_CAPTCHA_SECRET, '***')
     assertEquals(merged.EXTERNAL_APPLE_SECRET, '***')
@@ -219,115 +268,75 @@ Deno.test('getMergedConfig redacts secret fields', async () => {
   }
 })
 
-// ── Service-role JWT construction ──────────────────────────
-
-function decodeJwt(token: string): {
-  header: Record<string, unknown>
-  payload: Record<string, unknown>
-} {
-  const [h, p] = token.split('.')
-  const pad = (s: string) => s + '='.repeat((4 - (s.length % 4)) % 4)
-  const fromB64Url = (s: string) =>
-    JSON.parse(atob(pad(s.replaceAll('-', '+').replaceAll('_', '/'))))
-  return { header: fromB64Url(h), payload: fromB64Url(p) }
-}
-
-async function verifyHs256(token: string, secret: string): Promise<boolean> {
-  const [h, p, s] = token.split('.')
-  const enc = new TextEncoder()
-  const key = await crypto.subtle.importKey(
-    'raw',
-    enc.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['verify']
-  )
-  const sigBytes = Uint8Array.from(
-    atob(s.replaceAll('-', '+').replaceAll('_', '/') + '='.repeat((4 - (s.length % 4)) % 4)),
-    (c) => c.charCodeAt(0)
-  )
-  return crypto.subtle.verify('HMAC', key, sigBytes, enc.encode(`${h}.${p}`))
-}
-
-Deno.test('buildServiceRoleJwt produces HS256 token with service_role claim', async () => {
-  const secret = 'test-jwt-secret-x'
-  const token = await buildServiceRoleJwt(secret, 120)
-  const { header, payload } = decodeJwt(token)
-
-  assertEquals(header.alg, 'HS256')
-  assertEquals(header.typ, 'JWT')
-  assertEquals(payload.role, 'service_role')
-  assertEquals(typeof payload.iat, 'number')
-  assertEquals(typeof payload.exp, 'number')
-  assert((payload.exp as number) - (payload.iat as number) === 120)
-
-  assert(await verifyHs256(token, secret), 'signature must verify under the same secret')
-  assertEquals(await verifyHs256(token, 'wrong-secret'), false)
-})
-
-Deno.test('buildServiceRoleJwt throws when secret is empty', async () => {
-  await assertRejects(() => buildServiceRoleJwt('', 60), Error, 'JWT_SECRET')
-})
+// L9: The `buildServiceRoleJwt` tests were removed together with the helper
+// itself. The helper was unused in `functions/` — every production caller
+// already receives a signed `service_role` key through `getProjectBackend()`.
+// Keeping the tests around would only have kept the helper compilable for
+// the tests themselves, so both were dropped at the same time. If we ever
+// need to sign a service-role JWT from scratch again we should reach for
+// `jose` (already in the import map) instead of re-adding the bespoke
+// base64-url signer that used to live here.
 
 // ── Live /admin/settings round-trip ──────────────────────
 
 Deno.test('fetchLiveSettings returns parsed JSON on 200 with injected fetch', async () => {
-  const originalSecret = Deno.env.get('JWT_SECRET')
-  Deno.env.set('JWT_SECRET', 'round-trip-secret')
-  try {
-    let capturedAuth = ''
-    const fakeFetch: FetchLike = (_url, init) => {
-      capturedAuth = (init?.headers as Record<string, string>)?.Authorization ?? ''
-      return Promise.resolve(
-        new Response(JSON.stringify({ SITE_URL: 'https://live.example.com', JWT_EXP: 9999 }), {
+  let capturedAuth = ''
+  let capturedApikey = ''
+  let capturedUrl: string | URL | undefined
+  const fakeFetch: FetchLike = (url, init) => {
+    capturedUrl = url as string | URL | undefined
+    const headers = new Headers(
+      (init as RequestInit | undefined)?.headers ?? {},
+    )
+    capturedAuth = headers.get('Authorization') ?? ''
+    capturedApikey = headers.get('apikey') ?? ''
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({ SITE_URL: 'https://live.example.com', JWT_EXP: 9999 }),
+        {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
-        })
-      )
-    }
-    const live = await fetchLiveSettings(fakeFetch)
-    assert(live !== null, 'expected non-null live settings')
-    assertEquals(live!.SITE_URL, 'https://live.example.com')
-    assertEquals(live!.JWT_EXP, 9999)
-    assert(capturedAuth.startsWith('Bearer '), 'expected Bearer auth header')
-  } finally {
-    if (originalSecret === undefined) Deno.env.delete('JWT_SECRET')
-    else Deno.env.set('JWT_SECRET', originalSecret)
+        },
+      ),
+    )
   }
+  const live = await fetchLiveSettings(
+    fakeBackend('ref-live', {
+      endpoint: 'http://proj.test',
+      serviceKey: 'proj-svc-key',
+    }),
+    fakeFetch,
+  )
+  assert(live !== null, 'expected non-null live settings')
+  assertEquals(live!.SITE_URL, 'https://live.example.com')
+  assertEquals(live!.JWT_EXP, 9999)
+  assertEquals(capturedAuth, 'Bearer proj-svc-key')
+  assertEquals(capturedApikey, 'proj-svc-key')
+  assertEquals(String(capturedUrl), 'http://proj.test/auth/v1/admin/settings')
 })
 
 Deno.test('fetchLiveSettings returns null on 404 (endpoint not exposed)', async () => {
-  const originalSecret = Deno.env.get('JWT_SECRET')
-  Deno.env.set('JWT_SECRET', 'round-trip-secret')
-  try {
-    const fakeFetch: FetchLike = () => Promise.resolve(new Response('not found', { status: 404 }))
-    const live = await fetchLiveSettings(fakeFetch)
-    assertEquals(live, null)
-  } finally {
-    if (originalSecret === undefined) Deno.env.delete('JWT_SECRET')
-    else Deno.env.set('JWT_SECRET', originalSecret)
-  }
+  const fakeFetch: FetchLike = () => Promise.resolve(new Response('not found', { status: 404 }))
+  const live = await fetchLiveSettings(fakeBackend('ref-404'), fakeFetch)
+  assertEquals(live, null)
 })
 
 Deno.test('fetchLiveSettings returns null on network error', async () => {
-  const originalSecret = Deno.env.get('JWT_SECRET')
-  Deno.env.set('JWT_SECRET', 'round-trip-secret')
-  try {
-    const fakeFetch: FetchLike = () => Promise.reject(new Error('dns fail'))
-    const live = await fetchLiveSettings(fakeFetch)
-    assertEquals(live, null)
-  } finally {
-    if (originalSecret === undefined) Deno.env.delete('JWT_SECRET')
-    else Deno.env.set('JWT_SECRET', originalSecret)
-  }
+  const fakeFetch: FetchLike = () => Promise.reject(new Error('dns fail'))
+  const live = await fetchLiveSettings(fakeBackend('ref-err'), fakeFetch)
+  assertEquals(live, null)
 })
 
 Deno.test('getMergedConfig layers live over defaults, overrides over live', async () => {
   const ref = freshRef('layered')
-  const originalSecret = Deno.env.get('JWT_SECRET')
-  Deno.env.set('JWT_SECRET', 'merged-secret')
   try {
-    await upsertOverrides(pool, ref, { SITE_URL: 'https://override.example.com' }, '', 0)
+    await upsertOverrides(
+      pool,
+      ref,
+      { SITE_URL: 'https://override.example.com' },
+      '',
+      0,
+    )
     const fakeFetch: FetchLike = () =>
       Promise.resolve(
         new Response(
@@ -335,86 +344,80 @@ Deno.test('getMergedConfig layers live over defaults, overrides over live', asyn
             SITE_URL: 'https://live.example.com',
             URI_ALLOW_LIST: 'https://live-only.example.com',
           }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } }
-        )
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
       )
 
-    const merged = await getMergedConfig(pool, ref, fakeFetch)
+    const merged = await getMergedConfig(pool, fakeBackend(ref), fakeFetch)
     // Overrides win over live.
     assertEquals(merged.SITE_URL, 'https://override.example.com')
     // Live wins over env defaults.
     assertEquals(merged.URI_ALLOW_LIST, 'https://live-only.example.com')
   } finally {
     await cleanupOverrides(ref)
-    if (originalSecret === undefined) Deno.env.delete('JWT_SECRET')
-    else Deno.env.set('JWT_SECRET', originalSecret)
   }
 })
 
 // ── Partial-PATCH transactional semantics ────────────────
 
 Deno.test('pushLiveConfig treats 200 + {accepted, rejected} body as authoritative', async () => {
-  const originalSecret = Deno.env.get('JWT_SECRET')
-  Deno.env.set('JWT_SECRET', 'push-secret')
-  try {
-    const fakeFetch: FetchLike = () =>
-      Promise.resolve(
-        new Response(
-          JSON.stringify({
-            accepted: ['SITE_URL'],
-            rejected: ['CUSTOM_OAUTH_MAX_PROVIDERS'],
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } }
-        )
-      )
-    const result = await pushLiveConfig(
-      { SITE_URL: 'https://ok.example', CUSTOM_OAUTH_MAX_PROVIDERS: 5 },
-      fakeFetch
+  let capturedUrl: string | URL | undefined
+  const fakeFetch: FetchLike = (url) => {
+    capturedUrl = url as string | URL | undefined
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          accepted: ['SITE_URL'],
+          rejected: ['CUSTOM_OAUTH_MAX_PROVIDERS'],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
     )
-    assertEquals(result.accepted, ['SITE_URL'])
-    assertEquals(result.rejected, ['CUSTOM_OAUTH_MAX_PROVIDERS'])
-  } finally {
-    if (originalSecret === undefined) Deno.env.delete('JWT_SECRET')
-    else Deno.env.set('JWT_SECRET', originalSecret)
   }
+  const result = await pushLiveConfig(
+    fakeBackend('ref-push', { endpoint: 'http://push.test' }),
+    { SITE_URL: 'https://ok.example', CUSTOM_OAUTH_MAX_PROVIDERS: 5 },
+    fakeFetch,
+  )
+  assertEquals(result.accepted, ['SITE_URL'])
+  assertEquals(result.rejected, ['CUSTOM_OAUTH_MAX_PROVIDERS'])
+  assertEquals(String(capturedUrl), 'http://push.test/auth/v1/admin/config')
 })
 
 Deno.test('pushLiveConfig treats 404 as "nothing accepted" (override-only path)', async () => {
-  const originalSecret = Deno.env.get('JWT_SECRET')
-  Deno.env.set('JWT_SECRET', 'push-secret')
-  try {
-    const fakeFetch: FetchLike = () => Promise.resolve(new Response('not found', { status: 404 }))
-    const result = await pushLiveConfig({ SITE_URL: 'https://x' }, fakeFetch)
-    assertEquals(result.accepted, [])
-    assertEquals(result.rejected, ['SITE_URL'])
-  } finally {
-    if (originalSecret === undefined) Deno.env.delete('JWT_SECRET')
-    else Deno.env.set('JWT_SECRET', originalSecret)
-  }
+  const fakeFetch: FetchLike = () => Promise.resolve(new Response('not found', { status: 404 }))
+  const result = await pushLiveConfig(
+    fakeBackend('ref-push-404'),
+    { SITE_URL: 'https://x' },
+    fakeFetch,
+  )
+  assertEquals(result.accepted, [])
+  assertEquals(result.rejected, ['SITE_URL'])
 })
 
 Deno.test(
   'applyConfigPatch: GoTrue-rejected fields land in overrides; accepted fields do not',
   async () => {
     const ref = freshRef('partial-patch')
-    const originalSecret = Deno.env.get('JWT_SECRET')
-    Deno.env.set('JWT_SECRET', 'partial-secret')
     try {
       const fakeFetch: FetchLike = () =>
         Promise.resolve(
-          new Response(JSON.stringify({ accepted: ['SITE_URL'], rejected: ['JWT_EXP'] }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          })
+          new Response(
+            JSON.stringify({ accepted: ['SITE_URL'], rejected: ['JWT_EXP'] }),
+            {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            },
+          ),
         )
       const result = await applyConfigPatch(
         pool,
-        ref,
+        fakeBackend(ref),
         { SITE_URL: 'https://accepted.example.com', JWT_EXP: 9001 },
         '',
         0,
         undefined,
-        fakeFetch
+        fakeFetch,
       )
       assertEquals(result.accepted.sort(), ['SITE_URL'])
       assertEquals(result.overridden.sort(), ['JWT_EXP'])
@@ -426,32 +429,34 @@ Deno.test(
       assertEquals(stored.SITE_URL, undefined)
     } finally {
       await cleanupOverrides(ref)
-      if (originalSecret === undefined) Deno.env.delete('JWT_SECRET')
-      else Deno.env.set('JWT_SECRET', originalSecret)
     }
-  }
+  },
 )
 
 Deno.test(
   'applyConfigPatch: bad field (live 500) leaves overrides row unchanged before retry',
   async () => {
     const ref = freshRef('bad-field-tx')
-    const originalSecret = Deno.env.get('JWT_SECRET')
-    Deno.env.set('JWT_SECRET', 'partial-secret')
     try {
       // Pre-seed a known good override.
-      await upsertOverrides(pool, ref, { SITE_URL: 'https://pre.example.com' }, '', 0)
+      await upsertOverrides(
+        pool,
+        ref,
+        { SITE_URL: 'https://pre.example.com' },
+        '',
+        0,
+      )
 
       // Live side fails entirely — every key should land in overrides.
       const failingFetch: FetchLike = () => Promise.resolve(new Response('boom', { status: 500 }))
       await applyConfigPatch(
         pool,
-        ref,
+        fakeBackend(ref),
         { SITE_URL: 'https://after.example.com', JWT_EXP: 7200 },
         '',
         0,
         undefined,
-        failingFetch
+        failingFetch,
       )
 
       const after = await getOverrides(pool, ref)
@@ -459,8 +464,125 @@ Deno.test(
       assertEquals(after.JWT_EXP, 7200)
     } finally {
       await cleanupOverrides(ref)
-      if (originalSecret === undefined) Deno.env.delete('JWT_SECRET')
-      else Deno.env.set('JWT_SECRET', originalSecret)
     }
-  }
+  },
 )
+
+// M13 regression: a single PATCH used to trigger two separate
+// `GET /auth/v1/admin/settings` round-trips (one inside the internal
+// fetchLiveSettings call, one again from the follow-up getMergedConfig).
+// This test pins the new contract: exactly ONE settings fetch per
+// applyConfigPatch call, regardless of whether any keys were accepted
+// live. It also verifies the returned `merged` view contains both the
+// accepted-live patch values and the rejected (overridden) patch values
+// — Studio's save-then-reload flow relied on that merge.
+Deno.test(
+  'applyConfigPatch (M13): makes one /admin/settings fetch and returns merged view',
+  async () => {
+    const ref = freshRef('m13-merge-once')
+    try {
+      let settingsFetches = 0
+      let configPosts = 0
+      const fakeFetch: FetchLike = (url, init) => {
+        const u = String(url)
+        const method = (init as RequestInit | undefined)?.method ?? 'GET'
+        if (u.endsWith('/auth/v1/admin/settings') && method === 'GET') {
+          settingsFetches++
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                SITE_URL: 'https://pre-push.example.com',
+                JWT_EXP: 100,
+              }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } },
+            ),
+          )
+        }
+        if (u.endsWith('/auth/v1/admin/config') && method === 'POST') {
+          configPosts++
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ accepted: ['SITE_URL'], rejected: ['JWT_EXP'] }),
+              {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              },
+            ),
+          )
+        }
+        return Promise.resolve(new Response('not found', { status: 404 }))
+      }
+
+      const result = await applyConfigPatch(
+        pool,
+        fakeBackend(ref),
+        { SITE_URL: 'https://post-push.example.com', JWT_EXP: 9000 },
+        '',
+        0,
+        undefined,
+        fakeFetch,
+      )
+
+      // Exactly one settings fetch and one config push per PATCH.
+      assertEquals(settingsFetches, 1)
+      assertEquals(configPosts, 1)
+
+      // Shape of the result.
+      assertEquals(result.accepted.sort(), ['SITE_URL'])
+      assertEquals(result.overridden.sort(), ['JWT_EXP'])
+
+      // Accepted keys reflect the pushed value (live overlay), overridden
+      // keys reflect the override-table write.
+      assertEquals(result.merged.SITE_URL, 'https://post-push.example.com')
+      assertEquals(result.merged.JWT_EXP, 9000)
+    } finally {
+      await cleanupOverrides(ref)
+    }
+  },
+)
+
+Deno.test('applyConfigPatch (M13): empty patch does a single settings fetch, no push', async () => {
+  const ref = freshRef('m13-empty-patch')
+  try {
+    let settingsFetches = 0
+    let configPosts = 0
+    const fakeFetch: FetchLike = (url, init) => {
+      const u = String(url)
+      const method = (init as RequestInit | undefined)?.method ?? 'GET'
+      if (u.endsWith('/auth/v1/admin/settings') && method === 'GET') {
+        settingsFetches++
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ SITE_URL: 'https://live.example.com' }),
+            {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            },
+          ),
+        )
+      }
+      if (u.endsWith('/auth/v1/admin/config') && method === 'POST') {
+        configPosts++
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    }
+
+    const result = await applyConfigPatch(
+      pool,
+      fakeBackend(ref),
+      {},
+      '',
+      0,
+      undefined,
+      fakeFetch,
+    )
+
+    assertEquals(settingsFetches, 1)
+    assertEquals(configPosts, 0)
+    assertEquals(result.accepted, [])
+    assertEquals(result.overridden, [])
+    assertEquals(result.merged.SITE_URL, 'https://live.example.com')
+  } finally {
+    await cleanupOverrides(ref)
+  }
+})

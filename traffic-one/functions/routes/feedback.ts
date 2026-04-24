@@ -1,12 +1,12 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import {
   createFeedback,
-  updateFeedbackCustomFields,
   type FeedbackAuditContext,
   type FeedbackCategory,
   type FeedbackCreateInput,
+  updateFeedbackCustomFields,
 } from '../services/feedback.service.ts'
 import { getClientIp } from '../utils/client-ip.ts'
 
@@ -42,12 +42,12 @@ async function insertAndRespond(
   profileId: number,
   input: FeedbackCreateInput,
   gotrueId: string,
-  auditContext: FeedbackAuditContext
+  auditContext: FeedbackAuditContext,
 ): Promise<Response> {
   const row = await createFeedback(pool, profileId, input, gotrueId, auditContext)
   return Response.json(
     { id: row.id, created_at: row.created_at },
-    { status: 201, headers: corsHeaders }
+    { status: 201, headers: corsHeaders },
   )
 }
 
@@ -56,7 +56,7 @@ async function handleSend(
   pool: Pool,
   profileId: number,
   gotrueId: string,
-  auditContext: FeedbackAuditContext
+  auditContext: FeedbackAuditContext,
 ): Promise<Response> {
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
   const message = pickString(body, 'message')
@@ -82,11 +82,11 @@ async function handleSend(
           'orgSlug',
           'organization_slug',
           'tags',
-        ])
+        ]),
       ),
     },
     gotrueId,
-    auditContext
+    auditContext,
   )
 }
 
@@ -96,7 +96,7 @@ async function handleSurvey(
   profileId: number,
   category: Extract<FeedbackCategory, 'upgrade_survey' | 'downgrade_survey'>,
   gotrueId: string,
-  auditContext: FeedbackAuditContext
+  auditContext: FeedbackAuditContext,
 ): Promise<Response> {
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
   const message = pickString(body, 'message', 'additionalFeedback')
@@ -121,11 +121,11 @@ async function handleSurvey(
           'organizationSlug',
           'orgSlug',
           'organization_slug',
-        ])
+        ]),
       ),
     },
     gotrueId,
-    auditContext
+    auditContext,
   )
 }
 
@@ -136,7 +136,7 @@ export async function handleFeedback(
   pool: Pool,
   profileId: number,
   gotrueId: string,
-  email: string
+  email: string,
 ): Promise<Response> {
   const ip = getClientIp(req)
   const auditContext: FeedbackAuditContext = { email, ip, method, route: '/feedback' + path }
@@ -160,7 +160,7 @@ export async function handleFeedback(
     if (!Number.isInteger(id) || String(id) !== rawId) {
       return Response.json(
         { message: 'Conversation not found' },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders },
       )
     }
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
@@ -170,12 +170,12 @@ export async function handleFeedback(
       profileId,
       body,
       gotrueId,
-      auditContext
+      auditContext,
     )
     if (!updated) {
       return Response.json(
         { message: 'Conversation not found' },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders },
       )
     }
     return Response.json({ id: updated.id }, { headers: corsHeaders })

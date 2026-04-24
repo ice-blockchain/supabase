@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 export type CustomHostnameStatus = 'not_configured' | 'pending' | 'active' | 'failed'
 
@@ -16,7 +16,7 @@ export interface CustomHostnameRow {
 
 export async function getCustomHostnameByRef(
   pool: Pool,
-  projectRef: string
+  projectRef: string,
 ): Promise<CustomHostnameRow | null> {
   const connection = await pool.connect()
   try {
@@ -38,7 +38,7 @@ export async function getCustomHostnameByRef(
 export async function upsertInitializedCustomHostname(
   pool: Pool,
   projectRef: string,
-  customHostname: string
+  customHostname: string,
 ): Promise<CustomHostnameRow> {
   const connection = await pool.connect()
   try {

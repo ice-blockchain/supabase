@@ -30,7 +30,7 @@ export class ApiProvisioner implements ProjectProvisioner {
       throw new ProvisionerNotConfiguredError(
         'PROVISIONER_API_URL not configured. ' +
           'Set PROJECT_PROVISIONER=local for Docker development mode, ' +
-          'or set PROVISIONER_API_URL for production API mode.'
+          'or set PROVISIONER_API_URL for production API mode.',
       )
     }
     return this.configuredBaseUrl

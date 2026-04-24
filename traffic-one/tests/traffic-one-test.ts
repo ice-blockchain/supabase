@@ -6,7 +6,11 @@ import 'jsr:@std/dotenv/load'
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!
 const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
 })
 
 const PROFILE_URL = `${supabaseUrl}/api/platform/profile`
@@ -47,7 +51,9 @@ async function getTestSession() {
     password: 'test-password',
   })
   if (error || !session) {
-    throw new Error(`Failed to sign in test user: ${error?.message ?? 'no session'}`)
+    throw new Error(
+      `Failed to sign in test user: ${error?.message ?? 'no session'}`,
+    )
   }
   return session
 }
@@ -179,10 +185,13 @@ Deno.test('GET /scoped-access-tokens lists scoped tokens', async () => {
 Deno.test('DELETE /scoped-access-tokens/:id revokes scoped token', async () => {
   if (!createdScopedTokenId) return
   const session = await getTestSession()
-  const res = await fetch(`${PROFILE_URL}/scoped-access-tokens/${createdScopedTokenId}`, {
-    method: 'DELETE',
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${PROFILE_URL}/scoped-access-tokens/${createdScopedTokenId}`,
+    {
+      method: 'DELETE',
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 200)
   await res.body?.cancel()
 })
@@ -260,7 +269,7 @@ Deno.test('GET /audit returns audit logs with date filter', async () => {
 
   const res = await fetch(
     `${PROFILE_URL}/audit?iso_timestamp_start=${start}&iso_timestamp_end=${end}`,
-    { headers: authHeaders(session.access_token) }
+    { headers: authHeaders(session.access_token) },
   )
   assertEquals(res.status, 200)
 
@@ -450,7 +459,7 @@ Deno.test(
     assertEquals(afterRes.status, 200)
     const after = await afterRes.json()
     assertEquals(after.primary_email, originalEmail)
-  }
+  },
 )
 
 Deno.test('POST /profile returns ProfileResponse shape', async () => {
@@ -520,17 +529,20 @@ const PLATFORM_URL = `${supabaseUrl}/api/platform`
 const V1_URL = `${supabaseUrl}/api/v1`
 
 function assertTrafficOneMessage(body: unknown, allowed: string[]): void {
-  assert(body && typeof body === 'object', 'expected JSON object response body')
+  assert(
+    body && typeof body === 'object',
+    'expected JSON object response body',
+  )
   const message = (body as { message?: unknown }).message
   assertEquals(typeof message, 'string', 'expected a string `message` field')
   assert(
     typeof message === 'string' && !/^no Route matched/i.test(message),
-    `Kong default 404 leaked through — Kong did not route to traffic-one (got: ${message})`
+    `Kong default 404 leaked through — Kong did not route to traffic-one (got: ${message})`,
   )
   if (allowed.length > 0) {
     assert(
       typeof message === 'string' && allowed.includes(message),
-      `expected message in [${allowed.join(', ')}], got: ${message}`
+      `expected message in [${allowed.join(', ')}], got: ${message}`,
     )
   }
 }
@@ -552,10 +564,13 @@ Deno.test('Kong → platform-projects → GET /projects returns paginated list s
   })
   assertEquals(res.status, 200)
   const body = await res.json()
-  assert(typeof body === 'object' && body !== null, 'expected paginated object')
+  assert(
+    typeof body === 'object' && body !== null,
+    'expected paginated object',
+  )
   assert(
     'projects' in body || Array.isArray((body as { data?: unknown }).data),
-    'expected projects[] or data[]'
+    'expected projects[] or data[]',
   )
 })
 
@@ -579,7 +594,7 @@ Deno.test(
     assertEquals(res.status, 200)
     const body = await res.json()
     assert(Array.isArray(body), 'expected a notifications array')
-  }
+  },
 )
 
 Deno.test(
@@ -588,8 +603,11 @@ Deno.test(
     const res = await fetch(`${PLATFORM_URL}/telemetry/feature-flags`)
     assertEquals(res.status, 200)
     const body = await res.json()
-    assert(body && typeof body === 'object' && !Array.isArray(body), 'expected an object')
-  }
+    assert(
+      body && typeof body === 'object' && !Array.isArray(body),
+      'expected an object',
+    )
+  },
 )
 
 Deno.test(
@@ -603,14 +621,17 @@ Deno.test(
     assertEquals(res.status, 200)
     const body = await res.json()
     assertEquals((body as { success?: boolean }).success, true)
-  }
+  },
 )
 
 Deno.test('Kong → platform-stripe → GET /stripe/customer returns 200 shape', async () => {
   const session = await getTestSession()
-  const res = await fetch(`${PLATFORM_URL}/stripe/customer?slug=does-not-exist`, {
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${PLATFORM_URL}/stripe/customer?slug=does-not-exist`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   // Kong must route to traffic-one; the handler decides what 200 body to emit
   // (real Stripe off → stub customer; on → live lookup). Accept any 2xx/4xx
   // as long as the body originated from traffic-one.
@@ -627,13 +648,19 @@ Deno.test(
   'Kong → platform-auth → GET /auth/{ref}/config returns traffic-one 404 for unknown ref',
   async () => {
     const session = await getTestSession()
-    const res = await fetch(`${PLATFORM_URL}/auth/does-not-exist/config`, {
-      headers: authHeaders(session.access_token),
-    })
+    // L4: use a well-formed (20-char lowercase alphanumeric) but nonexistent
+    // ref so we exercise the membership / not-found branch, not the
+    // invalid-ref 400 branch added by `assertValidRef`.
+    const res = await fetch(
+      `${PLATFORM_URL}/auth/aaaaaaaaaaaaaaaaaaaa/config`,
+      {
+        headers: authHeaders(session.access_token),
+      },
+    )
     assertEquals(res.status, 404)
     const body = await res.json()
     assertTrafficOneMessage(body, ['Project not found'])
-  }
+  },
 )
 
 Deno.test(
@@ -652,40 +679,61 @@ Deno.test(
     if ('message' in (body as Record<string, unknown>)) {
       assertTrafficOneMessage(body, [])
     }
-  }
+  },
 )
 
 Deno.test(
   'Kong → platform-database → GET /database/{ref}/backups returns traffic-one 404 for unknown ref',
   async () => {
     const session = await getTestSession()
-    const res = await fetch(`${PLATFORM_URL}/database/does-not-exist/backups`, {
-      headers: authHeaders(session.access_token),
-    })
+    // L4: `database/{ref}` goes through `handleBackups` which now calls
+    // `assertValidRef`, so we need a well-formed (20-char) ref to reach the
+    // `getProjectByRef` → "Project not found" branch.
+    const res = await fetch(
+      `${PLATFORM_URL}/database/aaaaaaaaaaaaaaaaaaaa/backups`,
+      {
+        headers: authHeaders(session.access_token),
+      },
+    )
     // Accept 200 (some builds return empty) or 404 (project-scoped 404).
-    assert(res.status === 200 || res.status === 404, `unexpected status: ${res.status}`)
+    assert(
+      res.status === 200 || res.status === 404,
+      `unexpected status: ${res.status}`,
+    )
     const body = await res.json()
     if (res.status === 404) {
-      assertTrafficOneMessage(body, ['Project not found', 'Not Found', 'Not found'])
+      assertTrafficOneMessage(body, [
+        'Project not found',
+        'Not Found',
+        'Not found',
+      ])
     }
-  }
+  },
 )
 
 Deno.test(
   'Kong → platform-replication → GET /replication/{ref}/sources returns traffic-one shape',
   async () => {
     const session = await getTestSession()
-    const res = await fetch(`${PLATFORM_URL}/replication/does-not-exist/sources`, {
-      headers: authHeaders(session.access_token),
-    })
+    // L4: `replication/{ref}` now `assertValidRef`-gates before
+    // `getProjectByRef`, so pass a 20-char well-formed ref to hit the
+    // project-membership branch rather than the 400.
+    const res = await fetch(
+      `${PLATFORM_URL}/replication/aaaaaaaaaaaaaaaaaaaa/sources`,
+      {
+        headers: authHeaders(session.access_token),
+      },
+    )
     assert(res.status < 500, `unexpected 5xx: ${res.status}`)
     const body = await res.json()
     // Read-only stub returns [] for any ref; some routes 404 when project
     // membership is checked. Either is fine — verify it's traffic-one.
-    if (!Array.isArray(body) && 'message' in (body as Record<string, unknown>)) {
+    if (
+      !Array.isArray(body) && 'message' in (body as Record<string, unknown>)
+    ) {
       assertTrafficOneMessage(body, [])
     }
-  }
+  },
 )
 
 Deno.test('Kong → platform-feedback → POST /feedback/send returns traffic-one shape', async () => {
@@ -730,12 +778,12 @@ Deno.test(
     const session = await getTestSession()
     const res = await fetch(
       `${V1_URL}/organizations/definitely-not-an-org/project-claim/fake-token`,
-      { headers: authHeaders(session.access_token) }
+      { headers: authHeaders(session.access_token) },
     )
     assertEquals(res.status, 404)
     const body = await res.json()
     assertTrafficOneMessage(body, ['Organization not found'])
-  }
+  },
 )
 
 Deno.test(
@@ -751,18 +799,21 @@ Deno.test(
     assertEquals(res.status, 404)
     const body = await res.json()
     assertTrafficOneMessage(body, ['Branch not found'])
-  }
+  },
 )
 
 Deno.test(
   'Kong → v1-projects → GET /v1/projects/{ref}/health returns traffic-one 404 for unknown ref',
   async () => {
     const session = await getTestSession()
-    const res = await fetch(`${V1_URL}/projects/does-not-exist/health`, {
+    // L4: `handleProjectHealth` in projects.ts now validates the ref before
+    // the DB lookup. Well-formed (20-char) ref → 404 from the DB layer;
+    // anything else would return the 400 invalid-ref shape.
+    const res = await fetch(`${V1_URL}/projects/aaaaaaaaaaaaaaaaaaaa/health`, {
       headers: authHeaders(session.access_token),
     })
     assertEquals(res.status, 404)
     const body = await res.json()
     assertTrafficOneMessage(body, ['Project not found'])
-  }
+  },
 )

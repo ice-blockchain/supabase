@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 // Third-party auth integrations.
 //
@@ -51,8 +51,7 @@ function resolveType(input: ThirdPartyAuthInput): {
   jwksUrl: string | null
   customJwks: Record<string, unknown> | null
 } {
-  const hasCustom =
-    input.custom_jwks !== undefined &&
+  const hasCustom = input.custom_jwks !== undefined &&
     input.custom_jwks !== null &&
     typeof input.custom_jwks === 'object' &&
     Object.keys(input.custom_jwks).length > 0
@@ -61,7 +60,7 @@ function resolveType(input: ThirdPartyAuthInput): {
 
   if (!hasCustom && !hasIssuer && !hasJwks) {
     throw new InvalidThirdPartyAuthInputError(
-      'one of oidc_issuer_url, jwks_url, or custom_jwks is required'
+      'one of oidc_issuer_url, jwks_url, or custom_jwks is required',
     )
   }
 
@@ -91,7 +90,7 @@ export async function createThirdPartyAuth(
   input: ThirdPartyAuthInput,
   profileId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<ThirdPartyAuthRow> {
   const { type, oidcIssuerUrl, jwksUrl, customJwks } = resolveType(input)
 
@@ -118,7 +117,9 @@ export async function createThirdPartyAuth(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, 'project.third_party_auth_added',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'project_third_party_auth #' + row.id + ' (ref: ' + projectRef + ')'},
@@ -138,7 +139,7 @@ export async function createThirdPartyAuth(
 
 export async function listThirdPartyAuth(
   pool: Pool,
-  projectRef: string
+  projectRef: string,
 ): Promise<ThirdPartyAuthRow[]> {
   const connection = await pool.connect()
   try {
@@ -158,7 +159,7 @@ export async function listThirdPartyAuth(
 export async function getThirdPartyAuth(
   pool: Pool,
   projectRef: string,
-  id: string
+  id: string,
 ): Promise<ThirdPartyAuthRow | null> {
   const connection = await pool.connect()
   try {
@@ -181,7 +182,7 @@ export async function deleteThirdPartyAuth(
   id: string,
   profileId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<ThirdPartyAuthRow | null> {
   const connection = await pool.connect()
   try {
@@ -210,7 +211,9 @@ export async function deleteThirdPartyAuth(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, 'project.third_party_auth_removed',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'project_third_party_auth #' + row.id + ' (ref: ' + projectRef + ')'},

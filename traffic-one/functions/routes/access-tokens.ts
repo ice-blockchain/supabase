@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import {
@@ -15,7 +15,7 @@ export async function handleAccessTokens(
   pool: Pool,
   gotrueId: string,
   email: string,
-  profileId: number
+  profileId: number,
 ): Promise<Response> {
   const ip = getClientIp(req)
   const auditContext = { email, ip, method, route: '/profile' + path }
@@ -49,6 +49,6 @@ export async function handleAccessTokens(
     {
       status: 405,
       headers: corsHeaders,
-    }
+    },
   )
 }

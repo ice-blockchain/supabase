@@ -1,20 +1,23 @@
-import { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
 import { assert, assertEquals, assertExists } from 'jsr:@std/assert@1'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 import 'jsr:@std/dotenv/load'
 
+import { createDisposableUser, signInAs } from './_helpers/test-user.ts'
+
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!
-const superuserDbUrl = Deno.env.get('SUPERUSER_DB_URL')!
 const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
 })
 
 const V1_PROJECTS_URL = `${supabaseUrl}/api/v1/projects`
 const PROJECTS_URL = `${supabaseUrl}/api/platform/projects`
 const ORG_URL = `${supabaseUrl}/api/platform/organizations`
-const SIGNUP_URL = `${supabaseUrl}/api/platform/signup`
 
 async function getTestSession() {
   const {
@@ -25,7 +28,9 @@ async function getTestSession() {
     password: 'test-password',
   })
   if (error || !session) {
-    throw new Error(`Failed to sign in test user: ${error?.message ?? 'no session'}`)
+    throw new Error(
+      `Failed to sign in test user: ${error?.message ?? 'no session'}`,
+    )
   }
   return session
 }
@@ -37,78 +42,33 @@ function authHeaders(token: string): Record<string, string> {
   }
 }
 
-// Sign up + force-confirm a disposable second user for cross-user
-// (non-member) tests. Mirrors the pattern in project-api-keys-test.ts.
-async function signUpDisposableUser(): Promise<{ email: string; password: string }> {
-  const email = `projauth-other-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`
-  const password = 'Test1234!'
-
-  const res = await fetch(SIGNUP_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email,
-      password,
-      hcaptchaToken: null,
-      redirectTo: 'http://localhost:8000',
-    }),
-  })
-  await res.body?.cancel()
-  assert(res.status === 201 || res.status === 200, `signup failed: ${res.status}`)
-
-  const adminPool = new Pool(superuserDbUrl, 1, true)
-  try {
-    const connection = await adminPool.connect()
-    try {
-      await connection.queryObject`
-        UPDATE auth.users
-        SET email_confirmed_at = COALESCE(email_confirmed_at, now()),
-            confirmed_at = COALESCE(confirmed_at, now())
-        WHERE email = ${email}
-      `
-    } finally {
-      connection.release()
-    }
-  } finally {
-    await adminPool.end()
-  }
-
-  return { email, password }
-}
-
-async function signIn(email: string, password: string) {
-  const {
-    data: { session },
-    error,
-  } = await supabase.auth.signInWithPassword({ email, password })
-  if (error || !session) {
-    throw new Error(`sign-in failed for ${email}: ${error?.message ?? 'no session'}`)
-  }
-  return session
-}
-
 // ── Auth ─────────────────────────────────────────────────
 
 Deno.test(
   'GET /v1/projects/{ref}/config/auth/third-party-auth returns 401 without auth',
   async () => {
-    const res = await fetch(`${V1_PROJECTS_URL}/some-ref/config/auth/third-party-auth`)
+    const res = await fetch(
+      `${V1_PROJECTS_URL}/some-ref/config/auth/third-party-auth`,
+    )
     assertEquals(res.status, 401)
     await res.body?.cancel()
-  }
+  },
 )
 
 Deno.test(
   'POST /v1/projects/{ref}/config/auth/third-party-auth returns 401 without auth',
   async () => {
-    const res = await fetch(`${V1_PROJECTS_URL}/some-ref/config/auth/third-party-auth`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ oidc_issuer_url: 'https://example.com' }),
-    })
+    const res = await fetch(
+      `${V1_PROJECTS_URL}/some-ref/config/auth/third-party-auth`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oidc_issuer_url: 'https://example.com' }),
+      },
+    )
     assertEquals(res.status, 401)
     await res.body?.cancel()
-  }
+  },
 )
 
 Deno.test('GET /v1/projects/{ref}/ssl-enforcement returns 401 without auth', async () => {
@@ -134,7 +94,10 @@ Deno.test('setup: create test org and project for project-auth tests', async () 
   const orgRes = await fetch(ORG_URL, {
     method: 'POST',
     headers: authHeaders(session.access_token),
-    body: JSON.stringify({ name: `ProjectAuth Test Org ${Date.now()}`, tier: 'tier_free' }),
+    body: JSON.stringify({
+      name: `ProjectAuth Test Org ${Date.now()}`,
+      tier: 'tier_free',
+    }),
   })
   assertEquals(orgRes.status, 201)
   const org = await orgRes.json()
@@ -158,18 +121,24 @@ Deno.test('setup: create test org and project for project-auth tests', async () 
 
 Deno.test('GET /v1/projects/{unknownRef}/config/auth/third-party-auth returns 404', async () => {
   const session = await getTestSession()
-  const res = await fetch(`${V1_PROJECTS_URL}/nonexistent00000000/config/auth/third-party-auth`, {
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/nonexistent00000000/config/auth/third-party-auth`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 404)
   await res.body?.cancel()
 })
 
 Deno.test('GET /v1/projects/{unknownRef}/ssl-enforcement returns 404', async () => {
   const session = await getTestSession()
-  const res = await fetch(`${V1_PROJECTS_URL}/nonexistent00000000/ssl-enforcement`, {
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/nonexistent00000000/ssl-enforcement`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 404)
   await res.body?.cancel()
 })
@@ -190,9 +159,12 @@ let createdIntegrationId: string | null = null
 Deno.test('GET /third-party-auth returns empty list initially', async () => {
   if (!testRef) return
   const session = await getTestSession()
-  const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth`, {
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 200)
   const body = await res.json()
   assert(Array.isArray(body))
@@ -202,11 +174,14 @@ Deno.test('GET /third-party-auth returns empty list initially', async () => {
 Deno.test('POST /third-party-auth creates OIDC integration', async () => {
   if (!testRef) return
   const session = await getTestSession()
-  const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth`, {
-    method: 'POST',
-    headers: authHeaders(session.access_token),
-    body: JSON.stringify({ oidc_issuer_url: 'https://accounts.example.com' }),
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth`,
+    {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({ oidc_issuer_url: 'https://accounts.example.com' }),
+    },
+  )
   assertEquals(res.status, 201)
   const body = await res.json()
   assertExists(body.id)
@@ -220,11 +195,14 @@ Deno.test('POST /third-party-auth creates OIDC integration', async () => {
 Deno.test('POST /third-party-auth rejects empty body with 400', async () => {
   if (!testRef) return
   const session = await getTestSession()
-  const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth`, {
-    method: 'POST',
-    headers: authHeaders(session.access_token),
-    body: JSON.stringify({}),
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth`,
+    {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({}),
+    },
+  )
   assertEquals(res.status, 400)
   await res.body?.cancel()
 })
@@ -232,11 +210,16 @@ Deno.test('POST /third-party-auth rejects empty body with 400', async () => {
 Deno.test('POST /third-party-auth creates custom_jwks integration', async () => {
   if (!testRef) return
   const session = await getTestSession()
-  const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth`, {
-    method: 'POST',
-    headers: authHeaders(session.access_token),
-    body: JSON.stringify({ custom_jwks: { keys: [{ kty: 'RSA', kid: 'demo' }] } }),
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth`,
+    {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({
+        custom_jwks: { keys: [{ kty: 'RSA', kid: 'demo' }] },
+      }),
+    },
+  )
   assertEquals(res.status, 201)
   const body = await res.json()
   assertEquals(body.type, 'custom_jwks')
@@ -247,9 +230,12 @@ Deno.test('POST /third-party-auth creates custom_jwks integration', async () => 
 Deno.test('GET /third-party-auth lists created integrations', async () => {
   if (!testRef) return
   const session = await getTestSession()
-  const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth`, {
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 200)
   const body = await res.json()
   assert(Array.isArray(body))
@@ -261,7 +247,7 @@ Deno.test('GET /third-party-auth/{id} returns the OIDC integration', async () =>
   const session = await getTestSession()
   const res = await fetch(
     `${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth/${createdIntegrationId}`,
-    { headers: authHeaders(session.access_token) }
+    { headers: authHeaders(session.access_token) },
   )
   assertEquals(res.status, 200)
   const body = await res.json()
@@ -274,7 +260,7 @@ Deno.test('GET /third-party-auth/{unknownId} returns 404', async () => {
   const session = await getTestSession()
   const res = await fetch(
     `${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth/00000000-0000-0000-0000-000000000000`,
-    { headers: authHeaders(session.access_token) }
+    { headers: authHeaders(session.access_token) },
   )
   assertEquals(res.status, 404)
   await res.body?.cancel()
@@ -285,15 +271,18 @@ Deno.test('DELETE /third-party-auth/{id} removes the integration', async () => {
   const session = await getTestSession()
   const res = await fetch(
     `${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth/${createdIntegrationId}`,
-    { method: 'DELETE', headers: authHeaders(session.access_token) }
+    { method: 'DELETE', headers: authHeaders(session.access_token) },
   )
   assertEquals(res.status, 200)
   const body = await res.json()
   assertEquals(body.id, createdIntegrationId)
 
-  const listRes = await fetch(`${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth`, {
-    headers: authHeaders(session.access_token),
-  })
+  const listRes = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   const listBody = await listRes.json()
   assertEquals(listBody.length, 1)
 })
@@ -498,56 +487,64 @@ Deno.test(
   'GET /v1/projects/{ref}/config/auth/third-party-auth from non-member is denied',
   async () => {
     if (!testRef) return
-    const { email, password } = await signUpDisposableUser()
-    const otherSession = await signIn(email, password)
-    const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth`, {
-      headers: authHeaders(otherSession.access_token),
-    })
+    const { email, password } = await createDisposableUser('projauth-other')
+    const otherSession = await signInAs(email, password)
+    const res = await fetch(
+      `${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth`,
+      {
+        headers: authHeaders(otherSession.access_token),
+      },
+    )
     assert(
       res.status === 404 || res.status === 403,
-      `non-member should be denied (got ${res.status})`
+      `non-member should be denied (got ${res.status})`,
     )
     await res.body?.cancel()
-  }
+  },
 )
 
 Deno.test(
   'POST /v1/projects/{ref}/config/auth/third-party-auth from non-member is denied',
   async () => {
     if (!testRef) return
-    const { email, password } = await signUpDisposableUser()
-    const otherSession = await signIn(email, password)
-    const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth`, {
-      method: 'POST',
-      headers: authHeaders(otherSession.access_token),
-      body: JSON.stringify({ oidc_issuer_url: 'https://accounts.example.com' }),
-    })
+    const { email, password } = await createDisposableUser('projauth-other')
+    const otherSession = await signInAs(email, password)
+    const res = await fetch(
+      `${V1_PROJECTS_URL}/${testRef}/config/auth/third-party-auth`,
+      {
+        method: 'POST',
+        headers: authHeaders(otherSession.access_token),
+        body: JSON.stringify({
+          oidc_issuer_url: 'https://accounts.example.com',
+        }),
+      },
+    )
     assert(
       res.status === 404 || res.status === 403,
-      `non-member should be denied (got ${res.status})`
+      `non-member should be denied (got ${res.status})`,
     )
     await res.body?.cancel()
-  }
+  },
 )
 
 Deno.test('GET /v1/projects/{ref}/ssl-enforcement from non-member is denied', async () => {
   if (!testRef) return
-  const { email, password } = await signUpDisposableUser()
-  const otherSession = await signIn(email, password)
+  const { email, password } = await createDisposableUser('projauth-other')
+  const otherSession = await signInAs(email, password)
   const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/ssl-enforcement`, {
     headers: authHeaders(otherSession.access_token),
   })
   assert(
     res.status === 404 || res.status === 403,
-    `non-member should be denied (got ${res.status})`
+    `non-member should be denied (got ${res.status})`,
   )
   await res.body?.cancel()
 })
 
 Deno.test('PUT /v1/projects/{ref}/ssl-enforcement from non-member is denied', async () => {
   if (!testRef) return
-  const { email, password } = await signUpDisposableUser()
-  const otherSession = await signIn(email, password)
+  const { email, password } = await createDisposableUser('projauth-other')
+  const otherSession = await signInAs(email, password)
   const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/ssl-enforcement`, {
     method: 'PUT',
     headers: authHeaders(otherSession.access_token),
@@ -555,29 +552,29 @@ Deno.test('PUT /v1/projects/{ref}/ssl-enforcement from non-member is denied', as
   })
   assert(
     res.status === 404 || res.status === 403,
-    `non-member should be denied (got ${res.status})`
+    `non-member should be denied (got ${res.status})`,
   )
   await res.body?.cancel()
 })
 
 Deno.test('GET /v1/projects/{ref}/secrets from non-member is denied', async () => {
   if (!testRef) return
-  const { email, password } = await signUpDisposableUser()
-  const otherSession = await signIn(email, password)
+  const { email, password } = await createDisposableUser('projauth-other')
+  const otherSession = await signInAs(email, password)
   const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/secrets`, {
     headers: authHeaders(otherSession.access_token),
   })
   assert(
     res.status === 404 || res.status === 403,
-    `non-member should be denied (got ${res.status})`
+    `non-member should be denied (got ${res.status})`,
   )
   await res.body?.cancel()
 })
 
 Deno.test('POST /v1/projects/{ref}/secrets from non-member is denied', async () => {
   if (!testRef) return
-  const { email, password } = await signUpDisposableUser()
-  const otherSession = await signIn(email, password)
+  const { email, password } = await createDisposableUser('projauth-other')
+  const otherSession = await signInAs(email, password)
   const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/secrets`, {
     method: 'POST',
     headers: authHeaders(otherSession.access_token),
@@ -585,7 +582,7 @@ Deno.test('POST /v1/projects/{ref}/secrets from non-member is denied', async () 
   })
   assert(
     res.status === 404 || res.status === 403,
-    `non-member should be denied (got ${res.status})`
+    `non-member should be denied (got ${res.status})`,
   )
   await res.body?.cancel()
 })
@@ -600,7 +597,10 @@ Deno.test('GET /v1/projects/{crossOrgRef}/ssl-enforcement returns 404', async ()
   const otherOrgRes = await fetch(ORG_URL, {
     method: 'POST',
     headers: authHeaders(session.access_token),
-    body: JSON.stringify({ name: `ProjAuth Cross Org ${Date.now()}`, tier: 'tier_free' }),
+    body: JSON.stringify({
+      name: `ProjAuth Cross Org ${Date.now()}`,
+      tier: 'tier_free',
+    }),
   })
   assertEquals(otherOrgRes.status, 201)
   const otherOrg = await otherOrgRes.json()
@@ -619,15 +619,18 @@ Deno.test('GET /v1/projects/{crossOrgRef}/ssl-enforcement returns 404', async ()
     assertEquals(otherProjRes.status, 201)
     const otherProject = await otherProjRes.json()
 
-    const { email, password } = await signUpDisposableUser()
-    const otherSession = await signIn(email, password)
+    const { email, password } = await createDisposableUser('projauth-other')
+    const otherSession = await signInAs(email, password)
 
-    const res = await fetch(`${V1_PROJECTS_URL}/${otherProject.ref}/ssl-enforcement`, {
-      headers: authHeaders(otherSession.access_token),
-    })
+    const res = await fetch(
+      `${V1_PROJECTS_URL}/${otherProject.ref}/ssl-enforcement`,
+      {
+        headers: authHeaders(otherSession.access_token),
+      },
+    )
     assert(
       res.status === 404 || res.status === 403,
-      `ref-mismatch non-member should be denied (got ${res.status})`
+      `ref-mismatch non-member should be denied (got ${res.status})`,
     )
     await res.body?.cancel()
 

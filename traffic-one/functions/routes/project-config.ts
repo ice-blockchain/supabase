@@ -1,23 +1,29 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import {
+  getProjectBackend,
+  ProjectBackendNotProvisionedError,
+} from '../services/project-backend.service.ts'
+import {
+  type ConfigSection,
   deleteLintException,
   getConfigSection,
   getRotationStatus,
   InvalidSensitivityError,
   listLintExceptions,
   rotateJwtSecret,
+  type SectionColumn,
   SENSITIVITY_VALUES,
   updateConfigSection,
   updateDbPassword,
   updateProjectSensitivity,
   upsertLintException,
-  type ConfigSection,
-  type SectionColumn,
 } from '../services/project-config.service.ts'
 import { getProjectByRef } from '../services/project.service.ts'
 import { getClientIp } from '../utils/client-ip.ts'
+import { notProvisionedResponse } from '../utils/project-backend-response.ts'
+import { assertValidRef } from '../utils/ref-validation.ts'
 
 // ── Response helpers ───────────────────────────────────────
 
@@ -70,7 +76,7 @@ export async function handleProjectConfig(
   pool: Pool,
   profileId: number,
   gotrueId: string,
-  email: string
+  email: string,
 ): Promise<Response> {
   const refMatch = path.match(/^\/([^/]+)(\/.*)$/)
   if (!refMatch) {
@@ -79,6 +85,10 @@ export async function handleProjectConfig(
 
   const ref = refMatch[1]
   const subPath = refMatch[2]
+
+  // L4: reject malformed refs before hitting the DB.
+  const bad = assertValidRef(ref)
+  if (bad) return bad
 
   const project = await getProjectByRef(pool, ref, profileId)
   if (!project) {
@@ -111,7 +121,7 @@ export async function handleProjectConfig(
         profileId,
         orgId,
         gotrueId,
-        auditContext
+        auditContext,
       )
       return jsonResponse(data)
     }
@@ -134,12 +144,11 @@ export async function handleProjectConfig(
     }
     if (method === 'PATCH') {
       const body = await readJsonBody(req)
-      const providedRequestId =
-        typeof body.request_id === 'string'
-          ? body.request_id
-          : typeof body.requestId === 'string'
-            ? body.requestId
-            : null
+      const providedRequestId = typeof body.request_id === 'string'
+        ? body.request_id
+        : typeof body.requestId === 'string'
+        ? body.requestId
+        : null
       const requestId = providedRequestId ?? crypto.randomUUID()
       const state = await rotateJwtSecret(
         pool,
@@ -148,7 +157,7 @@ export async function handleProjectConfig(
         profileId,
         orgId,
         gotrueId,
-        auditContext
+        auditContext,
       )
       return jsonResponse(state)
     }
@@ -159,8 +168,8 @@ export async function handleProjectConfig(
   if (subPath === '/config/secrets/update-status') {
     if (method === 'GET') {
       const url = new URL(req.url)
-      const requestId =
-        url.searchParams.get('request_id') ?? url.searchParams.get('requestId') ?? undefined
+      const requestId = url.searchParams.get('request_id') ?? url.searchParams.get('requestId') ??
+        undefined
       const state = await getRotationStatus(pool, ref, requestId ?? undefined)
       if (!state) {
         return jsonResponse({ status: 'idle', request_id: null })
@@ -186,13 +195,13 @@ export async function handleProjectConfig(
           profileId,
           orgId,
           gotrueId,
-          auditContext
+          auditContext,
         )
         return jsonResponse(result)
       } catch (err) {
         if (err instanceof InvalidSensitivityError) {
           return badRequest(
-            `Invalid sensitivity. Expected one of: ${SENSITIVITY_VALUES.join(', ')}`
+            `Invalid sensitivity. Expected one of: ${SENSITIVITY_VALUES.join(', ')}`,
           )
         }
         throw err
@@ -209,16 +218,29 @@ export async function handleProjectConfig(
       if (typeof rawPassword !== 'string' || rawPassword.length === 0) {
         return badRequest('password (non-empty string) is required')
       }
+      let backend
+      try {
+        backend = await getProjectBackend(ref, pool)
+      } catch (err) {
+        if (err instanceof ProjectBackendNotProvisionedError) {
+          return notProvisionedResponse(err)
+        }
+        throw err
+      }
       const outcome = await updateDbPassword(
         pool,
         ref,
+        backend,
         rawPassword,
         profileId,
         orgId,
         gotrueId,
-        auditContext
+        auditContext,
       )
-      return jsonResponse({ result: outcome.result })
+      // H3: surface `applied` so Studio (and CLI callers) can tell whether
+      // the ALTER ROLE actually reached the project DB or whether only the
+      // Vault-side credentials were rotated.
+      return jsonResponse({ result: outcome.result, applied: outcome.applied })
     }
     return methodNotAllowed()
   }
@@ -232,12 +254,11 @@ export async function handleProjectConfig(
 
     if (method === 'POST') {
       const body = await readJsonBody(req)
-      const lintName =
-        typeof body.lint_name === 'string'
-          ? body.lint_name
-          : typeof body.name === 'string'
-            ? body.name
-            : null
+      const lintName = typeof body.lint_name === 'string'
+        ? body.lint_name
+        : typeof body.name === 'string'
+        ? body.name
+        : null
       if (!lintName) {
         return badRequest('lint_name is required')
       }
@@ -252,7 +273,7 @@ export async function handleProjectConfig(
         profileId,
         orgId,
         gotrueId,
-        auditContext
+        auditContext,
       )
       return jsonResponse(exception, 201)
     }
@@ -276,7 +297,7 @@ export async function handleProjectConfig(
         profileId,
         orgId,
         gotrueId,
-        auditContext
+        auditContext,
       )
       if (!deleted) {
         return notFound('Lint exception not found')

@@ -1,8 +1,8 @@
-import { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
 import { assert, assertEquals } from 'jsr:@std/assert@1'
 
 import 'jsr:@std/dotenv/load'
 
+import { createRetryingPool } from '../_helpers/pool.ts'
 import {
   createSecret,
   decryptSecretInternal,
@@ -10,11 +10,10 @@ import {
   listSecretNames,
 } from '../../functions/services/project-secrets.service.ts'
 
-const pool = new Pool(Deno.env.get('TRAFFIC_DB_URL')!, 1, true)
+const pool = createRetryingPool(Deno.env.get('TRAFFIC_DB_URL')!)
 
 async function cleanup(projectRef: string) {
-  const connection = await pool.connect()
-  try {
+  await pool.withConnection(async (connection) => {
     const rows = await connection.queryObject<{ secret_id: string }>`
       SELECT secret_id FROM traffic.project_secrets WHERE project_ref = ${projectRef}
     `
@@ -26,9 +25,7 @@ async function cleanup(projectRef: string) {
     await connection.queryObject`
       DELETE FROM traffic.project_secrets WHERE project_ref = ${projectRef}
     `
-  } finally {
-    connection.release()
-  }
+  })
 }
 
 // ── encrypt + decrypt round-trip via Vault ──────────────
@@ -36,7 +33,12 @@ async function cleanup(projectRef: string) {
 Deno.test('createSecret + decryptSecretInternal round-trip', async () => {
   const ref = `psec_rt_${Date.now()}`
   try {
-    const result = await createSecret(pool, ref, 'API_KEY', 'super-secret-value')
+    const result = await createSecret(
+      pool,
+      ref,
+      'API_KEY',
+      'super-secret-value',
+    )
     assertEquals(result.name, 'API_KEY')
     assertEquals(result.status, 'created')
 

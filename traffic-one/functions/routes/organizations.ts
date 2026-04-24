@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import {
@@ -16,10 +16,15 @@ import {
   listOrganizations,
   updateOrganization,
 } from '../services/organization.service.ts'
-import { listOrgProjects } from '../services/project.service.ts'
+import {
+  getProjectBackend,
+  ProjectBackendNotProvisionedError,
+} from '../services/project-backend.service.ts'
+import { getProjectByRef, listOrgProjects } from '../services/project.service.ts'
 import { getOrgDailyUsage, getOrgUsage } from '../services/usage.service.ts'
 import type { CreateOrganizationBody } from '../types/api.ts'
 import { getClientIp } from '../utils/client-ip.ts'
+import { assertValidRef } from '../utils/ref-validation.ts'
 import { handleBilling } from './billing.ts'
 import { handleMembers } from './members.ts'
 
@@ -36,7 +41,7 @@ export async function handleOrganizations(
   pool: Pool,
   profileId: number,
   gotrueId: string,
-  email: string
+  email: string,
 ): Promise<Response> {
   const ip = getClientIp(req)
   const auditContext = { email, ip, method, route: '/organizations' + path }
@@ -82,7 +87,7 @@ export async function handleOrganizations(
         tax_status: 'not_applicable',
         total: 0,
       },
-      { headers: corsHeaders }
+      { headers: corsHeaders },
     )
   }
 
@@ -101,7 +106,7 @@ export async function handleOrganizations(
     if (!org) {
       return Response.json(
         { message: 'Organization not found' },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders },
       )
     }
     const url = new URL(req.url)
@@ -122,7 +127,7 @@ export async function handleOrganizations(
     if (!org) {
       return Response.json(
         { message: 'Organization not found' },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders },
       )
     }
     return handleBilling(req, subPath, method, pool, org.id, profileId, gotrueId, email)
@@ -134,30 +139,82 @@ export async function handleOrganizations(
     if (!org) {
       return Response.json(
         { message: 'Organization not found' },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders },
       )
     }
 
     const url = new URL(req.url)
-    const usageOpts = {
+    const usageOpts: {
+      projectRef: string | undefined
+      projectName?: string
+      start: string | undefined
+      end: string | undefined
+    } = {
       projectRef: url.searchParams.get('project_ref') ?? undefined,
       start: url.searchParams.get('start') ?? undefined,
       end: url.searchParams.get('end') ?? undefined,
     }
 
+    // Resolve the analytics backend for Logflare queries. Without an explicit
+    // project_ref we have no unambiguous backend to fan Logflare queries at
+    // (org-level analytics aggregation is out of scope for this retrofit), so
+    // we leave `backend` undefined and `usage.service.ts` skips Logflare — DB
+    // and storage sizes still come through.
+    //
+    // H1: the provided `project_ref` MUST belong to the org in the URL path.
+    // Without this cross-check, any org member could pass `?project_ref=<foreign-ref>`
+    // and trick traffic-one into proxying Logflare queries against a project
+    // they don't own (the outer `getOrganizationBySlug` call only verifies
+    // the caller is a member of `{slug}`, not that `{project_ref}` lives
+    // inside `{slug}`). We gate with `getProjectByRef` (which already
+    // enforces caller membership) and then assert `organization_id === org.id`
+    // so cross-org refs return 404 with the same shape as unknown refs —
+    // giving the caller no way to distinguish "ref exists elsewhere" from
+    // "ref doesn't exist" (M7 anti-enumeration).
+    let analyticsBackend
+    if (usageOpts.projectRef) {
+      // L4: a malformed `project_ref` query param can never match a real row.
+      // Returning 400 (not 404) matches the rest of the handler surface that
+      // uses `assertValidRef` on path refs — the query-string position just
+      // shifts where the ref enters.
+      const bad = assertValidRef(usageOpts.projectRef)
+      if (bad) return bad
+      const project = await getProjectByRef(pool, usageOpts.projectRef, profileId)
+      if (!project || project.organization_id !== org.id) {
+        return Response.json(
+          { message: 'Project not found' },
+          { status: 404, headers: corsHeaders },
+        )
+      }
+      // L5: forward the resolved project name so usage.service.ts can use it
+      // as the allocation label instead of the platform-wide
+      // DEFAULT_PROJECT_NAME fallback.
+      usageOpts.projectName = project.name
+      try {
+        analyticsBackend = await getProjectBackend(usageOpts.projectRef, pool)
+      } catch (err) {
+        // M6: for org-level /usage we intentionally DON'T surface the
+        // canonical 501 here. A single unprovisioned project shouldn't
+        // black-hole the whole organization's usage response; we simply
+        // omit per-project analytics and let the aggregate continue.
+        // All other `getProjectBackend` callers use `notProvisionedResponse`.
+        if (!(err instanceof ProjectBackendNotProvisionedError)) throw err
+      }
+    }
+
     try {
       if (subPath === '/usage') {
-        const result = await getOrgUsage(pool, org.id, org.plan.id, usageOpts)
+        const result = await getOrgUsage(pool, org.id, org.plan.id, usageOpts, analyticsBackend)
         return Response.json(result, { headers: corsHeaders })
       } else {
-        const result = await getOrgDailyUsage(pool, org.id, usageOpts)
+        const result = await getOrgDailyUsage(pool, org.id, usageOpts, analyticsBackend)
         return Response.json(result, { headers: corsHeaders })
       }
     } catch (err) {
       console.error('Usage endpoint error:', err)
       return Response.json(
         { message: 'Failed to get usage stats' },
-        { status: 500, headers: corsHeaders }
+        { status: 500, headers: corsHeaders },
       )
     }
   }
@@ -168,7 +225,7 @@ export async function handleOrganizations(
     if (!org) {
       return Response.json(
         { message: 'Organization not found' },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders },
       )
     }
     const url = new URL(req.url)
@@ -177,7 +234,7 @@ export async function handleOrganizations(
     if (!startTs || !endTs) {
       return Response.json(
         { message: 'iso_timestamp_start and iso_timestamp_end are required' },
-        { status: 400, headers: corsHeaders }
+        { status: 400, headers: corsHeaders },
       )
     }
     const logs = await getOrgAuditLogs(pool, org.id, startTs, endTs)
@@ -190,7 +247,7 @@ export async function handleOrganizations(
     if (!org) {
       return Response.json(
         { message: 'Organization not found' },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders },
       )
     }
     return handleMembers(req, subPath, method, pool, org.id, profileId, gotrueId, email)
@@ -202,7 +259,7 @@ export async function handleOrganizations(
     if (!org) {
       return Response.json(
         { message: 'Organization not found' },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders },
       )
     }
     if (method === 'GET') {
@@ -210,7 +267,7 @@ export async function handleOrganizations(
       if (!provider) {
         return Response.json(
           { message: 'No SSO provider configured for this organization' },
-          { status: 404, headers: corsHeaders }
+          { status: 404, headers: corsHeaders },
         )
       }
       return Response.json(provider, { headers: corsHeaders })
@@ -223,7 +280,7 @@ export async function handleOrganizations(
         body,
         profileId,
         gotrueId,
-        auditContext
+        auditContext,
       )
       return Response.json(provider, { status: 201, headers: corsHeaders })
     }
@@ -235,12 +292,12 @@ export async function handleOrganizations(
         body,
         profileId,
         gotrueId,
-        auditContext
+        auditContext,
       )
       if (!provider) {
         return Response.json(
           { message: 'No SSO provider configured for this organization' },
-          { status: 404, headers: corsHeaders }
+          { status: 404, headers: corsHeaders },
         )
       }
       return Response.json(provider, { headers: corsHeaders })
@@ -250,7 +307,7 @@ export async function handleOrganizations(
       if (!deleted) {
         return Response.json(
           { message: 'No SSO provider configured for this organization' },
-          { status: 404, headers: corsHeaders }
+          { status: 404, headers: corsHeaders },
         )
       }
       return Response.json({ message: 'SSO provider deleted' }, { headers: corsHeaders })
@@ -268,7 +325,7 @@ export async function handleOrganizations(
     if (!org) {
       return Response.json(
         { message: 'Organization not found' },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders },
       )
     }
     return Response.json({ fileUrl: null, available: false }, { headers: corsHeaders })
@@ -284,7 +341,7 @@ export async function handleOrganizations(
     if (!org) {
       return Response.json(
         { message: 'Organization not found' },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders },
       )
     }
     return Response.json(
@@ -292,7 +349,7 @@ export async function handleOrganizations(
         code: 'self_hosted_unsupported',
         message: 'Data Processing Addendum requests are not available in self-hosted',
       },
-      { status: 501, headers: corsHeaders }
+      { status: 501, headers: corsHeaders },
     )
   }
 
@@ -331,7 +388,7 @@ export async function handleOrganizations(
     if (!org) {
       return Response.json(
         { message: 'Organization not found' },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders },
       )
     }
     return Response.json(stubData, { headers: corsHeaders })
@@ -343,7 +400,7 @@ export async function handleOrganizations(
       if (!org) {
         return Response.json(
           { message: 'Organization not found' },
-          { status: 404, headers: corsHeaders }
+          { status: 404, headers: corsHeaders },
         )
       }
       return Response.json({ available_versions: [] }, { headers: corsHeaders })
@@ -353,7 +410,7 @@ export async function handleOrganizations(
       if (!org) {
         return Response.json(
           { message: 'Organization not found' },
-          { status: 404, headers: corsHeaders }
+          { status: 404, headers: corsHeaders },
         )
       }
       return Response.json({}, { headers: corsHeaders })
@@ -375,7 +432,7 @@ export async function handleOrganizations(
     if (!org) {
       return Response.json(
         { message: 'Organization not found' },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders },
       )
     }
     return Response.json({}, { headers: corsHeaders })
@@ -387,7 +444,7 @@ export async function handleOrganizations(
     if (!org) {
       return Response.json(
         { message: 'Organization not found' },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders },
       )
     }
     return Response.json(org, { headers: corsHeaders })
@@ -407,12 +464,12 @@ export async function handleOrganizations(
         additional_billing_emails: body.additional_billing_emails,
       },
       gotrueId,
-      auditContext
+      auditContext,
     )
     if (!result) {
       return Response.json(
         { message: 'Organization not found' },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders },
       )
     }
     return Response.json(result, { headers: corsHeaders })
@@ -424,7 +481,7 @@ export async function handleOrganizations(
     if (!deleted) {
       return Response.json(
         { message: 'Organization not found or not owner' },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders },
       )
     }
     return Response.json({ message: 'Organization deleted' }, { headers: corsHeaders })
@@ -443,7 +500,7 @@ export async function handleV1Organizations(
   path: string,
   method: string,
   pool: Pool,
-  profileId: number
+  profileId: number,
 ): Promise<Response> {
   const claimMatch = path.match(/^\/([^/]+)\/project-claim\/([^/]+)\/?$/)
   if (!claimMatch) {
@@ -459,7 +516,7 @@ export async function handleV1Organizations(
   if (!org) {
     return Response.json(
       { message: 'Organization not found' },
-      { status: 404, headers: corsHeaders }
+      { status: 404, headers: corsHeaders },
     )
   }
 
@@ -472,7 +529,7 @@ export async function handleV1Organizations(
   if (method === 'POST') {
     return Response.json(
       { code: 'self_hosted_unsupported', message: 'Project claim is not available in self-hosted' },
-      { status: 501, headers: corsHeaders }
+      { status: 501, headers: corsHeaders },
     )
   }
 

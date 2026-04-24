@@ -1,4 +1,6 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
+
+import type { ProjectBackend } from './project-backend.service.ts'
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -112,7 +114,7 @@ function assertSectionColumn(section: SectionColumn): SectionColumn {
 
 function mergeWithDefaults<T extends ConfigSection>(
   section: T,
-  overrides: Record<string, unknown> | null | undefined
+  overrides: Record<string, unknown> | null | undefined,
 ): Record<string, unknown> {
   const defaults = CONFIG_DEFAULTS[section]
   return { ...defaults, ...(overrides ?? {}) }
@@ -131,7 +133,7 @@ function auditActorMetadata(auditContext: AuditContext): string {
 export async function getConfigSection(
   pool: Pool,
   projectRef: string,
-  section: ConfigSection
+  section: ConfigSection,
 ): Promise<Record<string, unknown>> {
   if (section === 'secrets') {
     return { ...CONFIG_DEFAULTS.secrets }
@@ -165,7 +167,7 @@ export async function updateConfigSection(
   profileId: number,
   organizationId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<Record<string, unknown>> {
   const column = assertSectionColumn(section)
   const patchJson = JSON.stringify(patch ?? {})
@@ -224,7 +226,7 @@ export async function rotateJwtSecret(
   profileId: number,
   organizationId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<RotationState> {
   const connection = await pool.connect()
   try {
@@ -300,7 +302,7 @@ function advanceStatus(current: RotationStatus): RotationStatus {
 export async function getRotationStatus(
   pool: Pool,
   projectRef: string,
-  requestId?: string
+  requestId?: string,
 ): Promise<RotationState | null> {
   const connection = await pool.connect()
   try {
@@ -354,7 +356,7 @@ export async function updateProjectSensitivity(
   profileId: number,
   organizationId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<{ ref: string; sensitivity: SensitivityLevel }> {
   if (!isValidSensitivity(sensitivity)) {
     throw new InvalidSensitivityError(sensitivity)
@@ -409,8 +411,9 @@ export async function updateProjectSensitivity(
 
 // Quote a password using dollar-quoted syntax so single quotes and
 // backslashes pass through unchanged. We deliberately swallow any error
-// from ALTER ROLE because self-hosted deployments vary: traffic_api may not
-// have CREATEROLE, or the Postgres role name may differ. The caller always
+// from ALTER ROLE because self-hosted deployments vary: the project DB
+// superuser role may differ, or the credentials carried by
+// `backend.connectionString` may not hold CREATEROLE. The caller always
 // returns 200 with `{ result: "acknowledged" }`.
 function buildAlterRolePasswordSql(password: string): string {
   const tag = 'traffic_one_db_pw'
@@ -424,32 +427,99 @@ function buildAlterRolePasswordSql(password: string): string {
 export async function updateDbPassword(
   pool: Pool,
   projectRef: string,
+  backend: ProjectBackend,
   password: string,
   profileId: number,
   organizationId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<DbPasswordOutcome> {
+  // ALTER ROLE targets the *project* DB via a one-shot pool that lives for
+  // the length of this call only. `lazy=true` + `pool.end()` in `finally`
+  // guarantees we never hold a tenant connection past the response.
   let applied = false
+  if (backend.connectionString) {
+    const projectPool = new Pool(backend.connectionString, 1, true)
+    try {
+      const projectConn = await projectPool.connect()
+      try {
+        const sql = buildAlterRolePasswordSql(password)
+        await projectConn.queryArray(sql)
+        applied = true
+      } catch (err) {
+        console.error('updateDbPassword: ALTER ROLE failed (non-fatal):', err)
+      } finally {
+        projectConn.release()
+      }
+    } catch (err) {
+      console.error('updateDbPassword: project pool acquire failed (non-fatal):', err)
+    } finally {
+      try {
+        await projectPool.end()
+      } catch (err) {
+        console.warn('updateDbPassword: project pool close failed:', err)
+      }
+    }
+  }
+
+  // Accounting + audit + Vault re-sync live on the traffic pool regardless
+  // of whether the project-side ALTER succeeded.
+  //
+  // H3: the stored `db_pass` and `connection_string` Vault secrets MUST
+  // stay in sync with the live password or any subsequent
+  // `getProjectBackend(ref)` call (JIT DDL, future psql streams, db-password
+  // rotation round-trips) will happily sign outbound work with the old
+  // password. We update both secrets atomically inside the same transaction
+  // as the `updated_at` bump + audit row so either everything commits or
+  // everything rolls back — no stale-credential window. A new
+  // `connection_string` is rebuilt from `backend` so the Vault-stored DSN
+  // matches the one `getProjectBackend` would hand out next.
+  let vaultApplied = false
+  const newConnectionString = buildConnectionString(backend, password)
   const connection = await pool.connect()
   try {
-    try {
-      const sql = buildAlterRolePasswordSql(password)
-      await connection.queryArray(sql)
-      applied = true
-    } catch (err) {
-      console.error('updateDbPassword: ALTER ROLE failed (non-fatal):', err)
-    }
-
     const tx = connection.createTransaction('db_password_rotated')
     await tx.begin()
+
+    const existing = await tx.queryObject<{
+      db_pass_secret_id: string | null
+      connection_string_secret_id: string | null
+    }>`
+      SELECT db_pass_secret_id, connection_string_secret_id
+      FROM traffic.projects
+      WHERE ref = ${projectRef}
+    `
+    const row = existing.rows[0]
+
+    if (row?.db_pass_secret_id) {
+      await tx.queryObject`
+        SELECT vault.update_secret(
+          ${row.db_pass_secret_id}::uuid,
+          ${password},
+          ${'project_' + projectRef + '_db_pass'},
+          ${'Database password'}
+        )
+      `
+      vaultApplied = true
+    }
+
+    if (row?.connection_string_secret_id && newConnectionString) {
+      await tx.queryObject`
+        SELECT vault.update_secret(
+          ${row.connection_string_secret_id}::uuid,
+          ${newConnectionString},
+          ${'project_' + projectRef + '_conn_string'},
+          ${'Connection string'}
+        )
+      `
+    }
 
     await tx.queryObject`
       UPDATE traffic.projects SET updated_at = now() WHERE ref = ${projectRef}
     `
 
     const action: AuditAction = 'project.db_password_rotated'
-    const targetMetadata = JSON.stringify({ applied })
+    const targetMetadata = JSON.stringify({ applied, vault_applied: vaultApplied })
     await tx.queryObject`
       INSERT INTO traffic.audit_logs (
         id, profile_id, organization_id, action_name, action_metadata,
@@ -470,6 +540,23 @@ export async function updateDbPassword(
     return { result: 'acknowledged', applied }
   } finally {
     connection.release()
+  }
+}
+
+// Build a fresh `connection_string` DSN from the backend + new password so
+// the Vault-stored value stays in sync with the live DB. Falls back to the
+// existing `connectionString` with only the password component rewritten
+// when the backend was resolved from a shared-stack DSN (`dbHost` may
+// differ from the DSN's `hostname`).
+function buildConnectionString(backend: ProjectBackend, password: string): string {
+  if (!backend.connectionString) return ''
+  try {
+    const u = new URL(backend.connectionString)
+    u.password = encodeURIComponent(password)
+    return u.toString()
+  } catch {
+    if (!backend.dbHost) return ''
+    return `postgresql://${backend.dbUser}:${password}@${backend.dbHost}:${backend.dbPort}/${backend.dbName}`
   }
 }
 
@@ -517,7 +604,7 @@ export async function upsertLintException(
   profileId: number,
   organizationId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<LintException> {
   const connection = await pool.connect()
   try {
@@ -573,7 +660,7 @@ export async function deleteLintException(
   profileId: number,
   organizationId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<boolean> {
   const connection = await pool.connect()
   try {

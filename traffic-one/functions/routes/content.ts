@@ -1,8 +1,11 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import {
+  type AuditContext,
   ContentForbiddenError,
+  type ContentType,
+  type ContentVisibility,
   countContent,
   createFolder,
   deleteContentBulk,
@@ -18,13 +21,11 @@ import {
   toListItem,
   updateFolder,
   upsertContent,
-  type AuditContext,
-  type ContentType,
-  type ContentVisibility,
   type UpsertContentInput,
 } from '../services/content.service.ts'
 import { getProjectByRef } from '../services/project.service.ts'
 import { getClientIp } from '../utils/client-ip.ts'
+import { assertValidRef } from '../utils/ref-validation.ts'
 
 // ── Response helpers ───────────────────────────────────────
 
@@ -142,13 +143,17 @@ export async function handleContent(
   pool: Pool,
   profileId: number,
   gotrueId: string,
-  email: string
+  email: string,
 ): Promise<Response> {
   const refMatch = path.match(/^\/([^/]+)\/content(\/.*)?$/)
   if (!refMatch) return notFound()
 
   const ref = refMatch[1]
   const subPath = refMatch[2] ?? ''
+
+  // L4: malformed ref → 400 before DB lookup.
+  const bad = assertValidRef(ref)
+  if (bad) return bad
 
   const project = await getProjectByRef(pool, ref, profileId)
   if (!project) {
@@ -183,7 +188,7 @@ export async function handleContent(
           profileId,
           gotrueId,
           auditContext,
-          method === 'POST'
+          method === 'POST',
         )
       }
       if (method === 'DELETE') {
@@ -195,7 +200,7 @@ export async function handleContent(
           projectOrgId,
           profileId,
           gotrueId,
-          auditContext
+          auditContext,
         )
       }
       return methodNotAllowed()
@@ -228,7 +233,7 @@ export async function handleContent(
           profileId,
           gotrueId,
           auditContext,
-          id
+          id,
         )
       }
       return methodNotAllowed()
@@ -248,7 +253,7 @@ export async function handleContent(
           projectOrgId,
           profileId,
           gotrueId,
-          auditContext
+          auditContext,
         )
       }
       if (method === 'DELETE') {
@@ -260,7 +265,7 @@ export async function handleContent(
           projectOrgId,
           profileId,
           gotrueId,
-          auditContext
+          auditContext,
         )
       }
       return methodNotAllowed()
@@ -285,7 +290,7 @@ export async function handleContent(
           profileId,
           gotrueId,
           auditContext,
-          id
+          id,
         )
       }
       return methodNotAllowed()
@@ -304,7 +309,7 @@ async function handleListRoot(
   pool: Pool,
   ref: string,
   profileId: number,
-  projectId: number
+  projectId: number,
 ): Promise<Response> {
   const q = url.searchParams
   const limit = parseIntSafe(q.get('limit'))
@@ -334,7 +339,7 @@ async function handleCount(
   url: URL,
   pool: Pool,
   ref: string,
-  profileId: number
+  profileId: number,
 ): Promise<Response> {
   const q = url.searchParams
   const result = await countContent(pool, ref, profileId, {
@@ -351,7 +356,7 @@ async function handleGetItem(
   ref: string,
   profileId: number,
   projectId: number,
-  id: string
+  id: string,
 ): Promise<Response> {
   const row = await getContentById(pool, ref, profileId, id)
   if (!row) return notFound('Content not found')
@@ -369,13 +374,13 @@ async function handleUpsert(
   profileId: number,
   gotrueId: string,
   auditContext: AuditContext,
-  isCreate: boolean
+  isCreate: boolean,
 ): Promise<Response> {
   const body = await readJsonBody(req)
   const typeRaw = typeof body.type === 'string' ? body.type : undefined
   const type = parseType(typeRaw) ?? 'sql'
   const visibility = parseVisibility(
-    typeof body.visibility === 'string' ? body.visibility : undefined
+    typeof body.visibility === 'string' ? body.visibility : undefined,
   )
 
   const rawId = typeof body.id === 'string' ? body.id : undefined
@@ -398,10 +403,9 @@ async function handleUpsert(
     description: typeof body.description === 'string' ? body.description : undefined,
     type,
     visibility,
-    content:
-      body.content && typeof body.content === 'object' && !Array.isArray(body.content)
-        ? (body.content as Record<string, unknown>)
-        : undefined,
+    content: body.content && typeof body.content === 'object' && !Array.isArray(body.content)
+      ? (body.content as Record<string, unknown>)
+      : undefined,
     favorite: typeof body.favorite === 'boolean' ? body.favorite : undefined,
     folder_id: folderId,
   }
@@ -420,7 +424,7 @@ async function handleBulkDelete(
   projectOrgId: number,
   profileId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<Response> {
   const queryIds = parseIdsList(url.searchParams.get('ids'))
   let ids = queryIds
@@ -439,7 +443,7 @@ async function handleBulkDelete(
     profileId,
     gotrueId,
     ids,
-    auditContext
+    auditContext,
   )
   return json({ deleted: result.deletedIds.length, ids: result.deletedIds })
 }
@@ -455,12 +459,12 @@ async function handlePatchItem(
   profileId: number,
   gotrueId: string,
   auditContext: AuditContext,
-  id: string
+  id: string,
 ): Promise<Response> {
   const body = await readJsonBody(req)
 
   const visibility = parseVisibility(
-    typeof body.visibility === 'string' ? body.visibility : undefined
+    typeof body.visibility === 'string' ? body.visibility : undefined,
   )
 
   const folderIdRaw = body.folder_id
@@ -476,10 +480,9 @@ async function handlePatchItem(
     name: typeof body.name === 'string' ? body.name : undefined,
     description: typeof body.description === 'string' ? body.description : undefined,
     visibility,
-    content:
-      body.content && typeof body.content === 'object' && !Array.isArray(body.content)
-        ? (body.content as Record<string, unknown>)
-        : undefined,
+    content: body.content && typeof body.content === 'object' && !Array.isArray(body.content)
+      ? (body.content as Record<string, unknown>)
+      : undefined,
     favorite: typeof body.favorite === 'boolean' ? body.favorite : undefined,
     ...(folderId !== undefined ? { folder_id: folderId } : {}),
   }
@@ -492,7 +495,7 @@ async function handlePatchItem(
     gotrueId,
     id,
     patch,
-    auditContext
+    auditContext,
   )
   if (!row) return notFound('Content not found')
   return json(toDetailItem(row, projectId))
@@ -505,7 +508,7 @@ async function handleListRootFolders(
   pool: Pool,
   ref: string,
   profileId: number,
-  projectId: number
+  projectId: number,
 ): Promise<Response> {
   const q = url.searchParams
   const limit = parseIntSafe(q.get('limit'))
@@ -540,18 +543,17 @@ async function handleCreateFolder(
   projectOrgId: number,
   profileId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<Response> {
   const body = await readJsonBody(req)
   const name = typeof body.name === 'string' ? body.name.trim() : ''
   if (name.length === 0) return badRequest('name is required')
 
-  const parentRaw =
-    typeof body.parent_id === 'string'
-      ? body.parent_id
-      : typeof body.parentId === 'string'
-        ? body.parentId
-        : null
+  const parentRaw = typeof body.parent_id === 'string'
+    ? body.parent_id
+    : typeof body.parentId === 'string'
+    ? body.parentId
+    : null
   const parentId = parentRaw && isUuid(parentRaw) ? parentRaw : null
   if (parentRaw && !parentId) {
     return badRequest('Invalid parent folder id')
@@ -565,7 +567,7 @@ async function handleCreateFolder(
     gotrueId,
     name,
     parentId,
-    auditContext
+    auditContext,
   )
   return json(toFolderMetadata(folder, projectId), 201)
 }
@@ -580,7 +582,7 @@ async function handleBulkDeleteFolders(
   projectOrgId: number,
   profileId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<Response> {
   const queryIds = parseIdsList(url.searchParams.getAll('ids').join(','))
   let ids = queryIds
@@ -603,7 +605,7 @@ async function handleBulkDeleteFolders(
     profileId,
     gotrueId,
     ids,
-    auditContext
+    auditContext,
   )
   return json({ deleted: result.deletedIds.length, ids: result.deletedIds })
 }
@@ -616,7 +618,7 @@ async function handleGetFolder(
   ref: string,
   profileId: number,
   projectId: number,
-  folderId: string
+  folderId: string,
 ): Promise<Response> {
   const q = url.searchParams
   const limit = parseIntSafe(q.get('limit'))
@@ -653,7 +655,7 @@ async function handlePatchFolder(
   profileId: number,
   gotrueId: string,
   auditContext: AuditContext,
-  folderId: string
+  folderId: string,
 ): Promise<Response> {
   const body = await readJsonBody(req)
   const name = typeof body.name === 'string' ? body.name.trim() : undefined
@@ -684,7 +686,7 @@ async function handlePatchFolder(
     gotrueId,
     folderId,
     { name, parentId },
-    auditContext
+    auditContext,
   )
   if (!folder) return notFound('Folder not found')
   return json(toFolderMetadata(folder, projectId))

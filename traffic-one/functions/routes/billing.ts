@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import {
@@ -35,7 +35,7 @@ export async function handleBilling(
   orgId: number,
   _profileId: number,
   _gotrueId: string,
-  _email: string
+  _email: string,
 ): Promise<Response> {
   // ── Subscription ─────────────────────────────────────
 
@@ -95,7 +95,7 @@ export async function handleBilling(
         subtotal: 0,
         lines: [],
       },
-      { headers: corsHeaders }
+      { headers: corsHeaders },
     )
   }
 
@@ -109,7 +109,7 @@ export async function handleBilling(
       if (!invoice) {
         return Response.json(
           { message: 'Invoice not found' },
-          { status: 404, headers: corsHeaders }
+          { status: 404, headers: corsHeaders },
         )
       }
       return Response.json({ url: invoice.invoice_pdf ?? '' }, { headers: corsHeaders })
@@ -150,7 +150,7 @@ export async function handleBilling(
     if (!isStripeEnabled()) {
       return Response.json(
         { id: 'seti_local', client_secret: 'local_mode' },
-        { headers: corsHeaders }
+        { headers: corsHeaders },
       )
     }
     const body = await req.json()
@@ -229,7 +229,7 @@ export async function handleBilling(
 export async function handleStripe(
   req: Request,
   subPath: string,
-  method: string
+  method: string,
 ): Promise<Response> {
   if (subPath === '/invoices/overdue' && method === 'GET') {
     return Response.json([], { headers: corsHeaders })
@@ -239,7 +239,7 @@ export async function handleStripe(
     if (!isStripeEnabled()) {
       return Response.json(
         { id: 'seti_local', client_secret: 'local_mode' },
-        { headers: corsHeaders }
+        { headers: corsHeaders },
       )
     }
     // H3: previously returned `{ id: '', client_secret: '' }` — Studio cannot
@@ -273,7 +273,7 @@ export async function handleProjectBilling(
   method: string,
   pool: Pool,
   ref: string,
-  profileId: number
+  profileId: number,
 ): Promise<Response> {
   const project = await getProjectByRef(pool, ref, profileId)
   if (!project) {
@@ -291,7 +291,7 @@ export async function handleProjectBilling(
       pool,
       ref,
       body.addon_type ?? body.type,
-      body.addon_variant ?? body.variant
+      body.addon_variant ?? body.variant,
     )
     return Response.json(addons, { headers: corsHeaders })
   }
@@ -314,7 +314,7 @@ export async function handleProjectBilling(
         usage_fees: [],
         nano_enabled: true,
       },
-      { headers: corsHeaders }
+      { headers: corsHeaders },
     )
   }
 
@@ -323,6 +323,6 @@ export async function handleProjectBilling(
 
 // ── Confirm subscription on org creation ───────────────
 
-export async function handleConfirmSubscription(_req: Request, _method: string): Promise<Response> {
+export function handleConfirmSubscription(_req: Request, _method: string): Response {
   return Response.json({ message: 'Subscription confirmed' }, { headers: corsHeaders })
 }

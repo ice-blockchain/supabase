@@ -6,7 +6,11 @@ import 'jsr:@std/dotenv/load'
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!
 const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
 })
 
 const ORG_URL = `${supabaseUrl}/api/platform/organizations`
@@ -22,7 +26,9 @@ async function getTestSession() {
     password: 'test-password',
   })
   if (error || !session) {
-    throw new Error(`Failed to sign in test user: ${error?.message ?? 'no session'}`)
+    throw new Error(
+      `Failed to sign in test user: ${error?.message ?? 'no session'}`,
+    )
   }
   return session
 }
@@ -88,7 +94,11 @@ Deno.test('PUT /organizations/{slug}/billing/subscription changes tier', async (
   const res = await fetch(`${ORG_URL}/${testSlug}/billing/subscription`, {
     method: 'PUT',
     headers: authHeaders(session.access_token),
-    body: JSON.stringify({ tier: 'tier_pro', plan_id: 'pro', plan_name: 'Pro' }),
+    body: JSON.stringify({
+      tier: 'tier_pro',
+      plan_id: 'pro',
+      plan_name: 'Pro',
+    }),
   })
   assertEquals(res.status, 200)
 
@@ -100,11 +110,14 @@ Deno.test('PUT /organizations/{slug}/billing/subscription changes tier', async (
 Deno.test('POST /organizations/{slug}/billing/subscription/preview returns preview', async () => {
   if (!testSlug) return
   const session = await getTestSession()
-  const res = await fetch(`${ORG_URL}/${testSlug}/billing/subscription/preview`, {
-    method: 'POST',
-    headers: authHeaders(session.access_token),
-    body: JSON.stringify({ target_plan: 'team' }),
-  })
+  const res = await fetch(
+    `${ORG_URL}/${testSlug}/billing/subscription/preview`,
+    {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({ target_plan: 'team' }),
+    },
+  )
   assertEquals(res.status, 200)
 
   const preview = await res.json()
@@ -187,7 +200,11 @@ Deno.test('PUT /organizations/{slug}/customer updates billing profile', async ()
   const res = await fetch(`${ORG_URL}/${testSlug}/customer`, {
     method: 'PUT',
     headers: authHeaders(session.access_token),
-    body: JSON.stringify({ billing_name: 'Test Corp', country: 'US', city: 'SF' }),
+    body: JSON.stringify({
+      billing_name: 'Test Corp',
+      country: 'US',
+      city: 'SF',
+    }),
   })
   assertEquals(res.status, 200)
 
@@ -215,11 +232,20 @@ Deno.test(
     assertEquals(res.status, 200)
 
     const body = await res.json()
-    assert(!Array.isArray(body), 'tax-ids must return an object envelope, not a bare array')
+    assert(
+      !Array.isArray(body),
+      'tax-ids must return an object envelope, not a bare array',
+    )
     assertEquals(typeof body, 'object')
-    assert('tax_id' in body, 'response must have a `tax_id` field (per TaxIdResponse schema)')
-    assert(body.tax_id === null || typeof body.tax_id === 'object', 'tax_id must be object or null')
-  }
+    assert(
+      'tax_id' in body,
+      'response must have a `tax_id` field (per TaxIdResponse schema)',
+    )
+    assert(
+      body.tax_id === null || typeof body.tax_id === 'object',
+      'tax_id must be object or null',
+    )
+  },
 )
 
 Deno.test(
@@ -230,16 +256,23 @@ Deno.test(
     const res = await fetch(`${ORG_URL}/${testSlug}/tax-ids`, {
       method: 'PUT',
       headers: authHeaders(session.access_token),
-      body: JSON.stringify({ type: 'eu_vat', value: 'DE123456789', country: 'DE' }),
+      body: JSON.stringify({
+        type: 'eu_vat',
+        value: 'DE123456789',
+        country: 'DE',
+      }),
     })
     assertEquals(res.status, 200)
 
     const body = await res.json()
-    assertExists(body.tax_id, 'PUT must echo the persisted tax id as `{ tax_id: {...} }`')
+    assertExists(
+      body.tax_id,
+      'PUT must echo the persisted tax id as `{ tax_id: {...} }`',
+    )
     assertEquals(body.tax_id.type, 'eu_vat')
     assertEquals(body.tax_id.value, 'DE123456789')
     assertEquals(body.tax_id.country, 'DE')
-  }
+  },
 )
 
 // ── Payment Methods ──────────────────────────────────────
@@ -305,9 +338,12 @@ Deno.test('GET /stripe/invoices/overdue returns count', async () => {
 
 Deno.test('GET billing endpoint returns 404 for nonexistent org', async () => {
   const session = await getTestSession()
-  const res = await fetch(`${ORG_URL}/nonexistent-org-12345/billing/subscription`, {
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${ORG_URL}/nonexistent-org-12345/billing/subscription`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 404)
   await res.body?.cancel()
 })

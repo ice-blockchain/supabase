@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 export interface LogDrainRow {
   id: number
@@ -95,10 +95,22 @@ function toBackendResponse(row: LogDrainRow, userId: number): LFBackendResponse 
 }
 
 function isUniqueViolation(err: unknown): boolean {
-  if (!err || typeof err !== 'object') return false
-  const record = err as { code?: unknown; fields?: { code?: unknown } }
-  if (record.code === UNIQUE_VIOLATION) return true
-  if (record.fields && record.fields.code === UNIQUE_VIOLATION) return true
+  // postgres-deno wraps the raw `PostgresError` in a `TransactionError`
+  // whenever a statement inside a `createTransaction` block fails. The
+  // underlying SQLSTATE lives on `err.cause` (or on the legacy
+  // `err.fields.code` for pre-transaction callsites), so we walk the cause
+  // chain and inspect each rung before giving up.
+  let current: unknown = err
+  for (let i = 0; i < 5 && current && typeof current === 'object'; i++) {
+    const record = current as {
+      code?: unknown
+      fields?: { code?: unknown }
+      cause?: unknown
+    }
+    if (record.code === UNIQUE_VIOLATION) return true
+    if (record.fields && record.fields.code === UNIQUE_VIOLATION) return true
+    current = record.cause
+  }
   return false
 }
 
@@ -111,7 +123,7 @@ export async function createLogDrain(
   input: LogDrainInput,
   gotrueId: string,
   organizationId: number,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<CreateDrainOutcome> {
   if (!input.name || !input.name.trim()) {
     return { status: 'conflict', message: 'name is required' }
@@ -142,7 +154,15 @@ export async function createLogDrain(
       `
       row = inserted.rows[0]
     } catch (err) {
-      await tx.rollback()
+      // postgres-deno auto-aborts the transaction on the server when a
+      // statement errors — a subsequent explicit `rollback()` throws
+      // "transaction has not been started yet". Make the cleanup best-effort
+      // so we can still return a clean 409/5xx to the caller.
+      try {
+        await tx.rollback()
+      } catch {
+        // ignore — tx already ended server-side
+      }
       if (isUniqueViolation(err)) {
         return {
           status: 'conflict',
@@ -159,7 +179,9 @@ export async function createLogDrain(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, 'project.log_drain_created',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'log_drains #' + row.id + ' (ref: ' + projectRef + ', name: ' + row.name + ')'},
@@ -194,7 +216,7 @@ export async function listLogDrains(pool: Pool, projectRef: string): Promise<Log
 export async function listLogDrainResponses(
   pool: Pool,
   projectRef: string,
-  userId: number
+  userId: number,
 ): Promise<LFBackendResponse[]> {
   const rows = await listLogDrains(pool, projectRef)
   return rows.map((row) => toBackendResponse(row, userId))
@@ -205,7 +227,7 @@ export async function listLogDrainResponses(
 export async function getLogDrain(
   pool: Pool,
   projectRef: string,
-  token: string
+  token: string,
 ): Promise<LogDrainRow | null> {
   const connection = await pool.connect()
   try {
@@ -232,7 +254,7 @@ export async function updateLogDrain(
   profileId: number,
   organizationId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<UpdateDrainOutcome> {
   const touchedKeys = Object.entries(patch)
     .filter(([, v]) => v !== undefined)
@@ -261,12 +283,14 @@ export async function updateLogDrain(
     const current = existing.rows[0]
 
     const nextName = patch.name !== undefined ? patch.name : current.name
-    const nextDescription =
-      patch.description !== undefined ? (patch.description ?? '') : current.description
+    const nextDescription = patch.description !== undefined
+      ? (patch.description ?? '')
+      : current.description
     const nextType = patch.type !== undefined ? patch.type : current.type
     const nextConfig = patch.config !== undefined ? (patch.config ?? {}) : (current.config ?? {})
-    const nextFilters =
-      patch.filters !== undefined ? (patch.filters ?? []) : (current.filters ?? [])
+    const nextFilters = patch.filters !== undefined
+      ? (patch.filters ?? [])
+      : (current.filters ?? [])
     const nextActive = patch.active !== undefined ? patch.active : current.active
 
     let updated: LogDrainRow
@@ -291,7 +315,11 @@ export async function updateLogDrain(
       }
       updated = result.rows[0]
     } catch (err) {
-      await tx.rollback()
+      try {
+        await tx.rollback()
+      } catch {
+        // ignore — tx already ended server-side on error
+      }
       if (isUniqueViolation(err)) {
         return {
           status: 'conflict',
@@ -308,7 +336,9 @@ export async function updateLogDrain(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, 'project.log_drain_updated',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'log_drains #' + updated.id + ' (ref: ' + projectRef + ', name: ' + updated.name + ')'},
@@ -333,7 +363,7 @@ export async function deleteLogDrain(
   profileId: number,
   gotrueId: string,
   organizationId: number,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<LogDrainRow | null> {
   const connection = await pool.connect()
   try {
@@ -361,7 +391,9 @@ export async function deleteLogDrain(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, 'project.log_drain_deleted',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'log_drains #' + row.id + ' (ref: ' + projectRef + ', name: ' + row.name + ')'},

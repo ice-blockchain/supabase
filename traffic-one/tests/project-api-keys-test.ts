@@ -1,21 +1,26 @@
-import { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 import { assert, assertEquals, assertExists } from 'jsr:@std/assert@1'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 import 'jsr:@std/dotenv/load'
+
+import { createDisposableUser, signInAs } from './_helpers/test-user.ts'
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!
 const superuserDbUrl = Deno.env.get('SUPERUSER_DB_URL')!
 
 const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
 })
 
 const V1_PROJECTS_URL = `${supabaseUrl}/api/v1/projects`
 const PROJECTS_URL = `${supabaseUrl}/api/platform/projects`
 const ORG_URL = `${supabaseUrl}/api/platform/organizations`
-const SIGNUP_URL = `${supabaseUrl}/api/platform/signup`
 
 async function getTestSession() {
   const {
@@ -26,7 +31,9 @@ async function getTestSession() {
     password: 'test-password',
   })
   if (error || !session) {
-    throw new Error(`Failed to sign in test user: ${error?.message ?? 'no session'}`)
+    throw new Error(
+      `Failed to sign in test user: ${error?.message ?? 'no session'}`,
+    )
   }
   return session
 }
@@ -38,61 +45,10 @@ function authHeaders(token: string): Record<string, string> {
   }
 }
 
-// Sign up a disposable second user we use for cross-user (non-member) tests.
-// Mirrors the pattern in update-email-test.ts so we can force-confirm the
-// account and sign in immediately even when ENABLE_EMAIL_AUTOCONFIRM is false.
-async function signUpDisposableUser(): Promise<{ email: string; password: string }> {
-  const email = `apikeys-other-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`
-  const password = 'Test1234!'
-
-  const res = await fetch(SIGNUP_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email,
-      password,
-      hcaptchaToken: null,
-      redirectTo: 'http://localhost:8000',
-    }),
-  })
-  await res.body?.cancel()
-  assert(res.status === 201 || res.status === 200, `signup failed: ${res.status}`)
-
-  const adminPool = new Pool(superuserDbUrl, 1, true)
-  try {
-    const connection = await adminPool.connect()
-    try {
-      await connection.queryObject`
-        UPDATE auth.users
-        SET email_confirmed_at = COALESCE(email_confirmed_at, now()),
-            confirmed_at = COALESCE(confirmed_at, now())
-        WHERE email = ${email}
-      `
-    } finally {
-      connection.release()
-    }
-  } finally {
-    await adminPool.end()
-  }
-
-  return { email, password }
-}
-
-async function signIn(email: string, password: string) {
-  const {
-    data: { session },
-    error,
-  } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  })
-  if (error || !session) {
-    throw new Error(`sign-in failed for ${email}: ${error?.message ?? 'no session'}`)
-  }
-  return session
-}
-
-async function countAuditRowsByAction(action: string, projectRef: string): Promise<number> {
+async function countAuditRowsByAction(
+  action: string,
+  projectRef: string,
+): Promise<number> {
   const adminPool = new Pool(superuserDbUrl, 1, true)
   try {
     const conn = await adminPool.connect()
@@ -130,7 +86,9 @@ Deno.test('POST /v1/projects/{ref}/api-keys returns 401 without auth', async () 
 })
 
 Deno.test('GET /v1/projects/{ref}/config/auth/signing-keys returns 401 without auth', async () => {
-  const res = await fetch(`${V1_PROJECTS_URL}/some-ref/config/auth/signing-keys`)
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/some-ref/config/auth/signing-keys`,
+  )
   assertEquals(res.status, 401)
   await res.body?.cancel()
 })
@@ -209,11 +167,17 @@ Deno.test('POST /v1/projects/{ref}/api-keys creates key and returns plaintext on
   assertExists(body.api_key)
   assert(
     typeof body.api_key === 'string' && body.api_key.startsWith('sb_secret_'),
-    'plaintext api_key should be returned on create with sb_secret_ prefix'
+    'plaintext api_key should be returned on create with sb_secret_ prefix',
   )
   assertExists(body.api_key_alias)
-  assert(body.api_key_alias !== body.api_key, 'alias must differ from plaintext')
-  assert(body.api_key_alias.includes('...'), "alias should use '...' as the ellipsis")
+  assert(
+    body.api_key_alias !== body.api_key,
+    'alias must differ from plaintext',
+  )
+  assert(
+    body.api_key_alias.includes('...'),
+    "alias should use '...' as the ellipsis",
+  )
 
   createdApiKeyId = body.id
 })
@@ -259,7 +223,11 @@ Deno.test('GET /v1/projects/{ref}/api-keys lists metadata without plaintext', as
   assertEquals(found.name, 'ci-secret')
   assertEquals(found.type, 'secret')
   assertExists(found.api_key_alias)
-  assertEquals(found.api_key, undefined, 'plaintext api_key must not be returned on list')
+  assertEquals(
+    found.api_key,
+    undefined,
+    'plaintext api_key must not be returned on list',
+  )
 })
 
 Deno.test(
@@ -267,14 +235,21 @@ Deno.test(
   async () => {
     if (!testRef || createdApiKeyId === null) return
     const session = await getTestSession()
-    const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/api-keys/${createdApiKeyId}`, {
-      headers: authHeaders(session.access_token),
-    })
+    const res = await fetch(
+      `${V1_PROJECTS_URL}/${testRef}/api-keys/${createdApiKeyId}`,
+      {
+        headers: authHeaders(session.access_token),
+      },
+    )
     assertEquals(res.status, 200)
     const body = await res.json()
     assertEquals(body.id, createdApiKeyId)
-    assertEquals(body.api_key, undefined, 'plaintext api_key must not be returned on detail read')
-  }
+    assertEquals(
+      body.api_key,
+      undefined,
+      'plaintext api_key must not be returned on detail read',
+    )
+  },
 )
 
 // ── PATCH description update ─────────────────────────────
@@ -282,19 +257,32 @@ Deno.test(
 Deno.test('PATCH /v1/projects/{ref}/api-keys/{id} updates description', async () => {
   if (!testRef || createdApiKeyId === null) return
   const session = await getTestSession()
-  const before = await countAuditRowsByAction('project.api_key_updated', testRef)
+  const before = await countAuditRowsByAction(
+    'project.api_key_updated',
+    testRef,
+  )
 
-  const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/api-keys/${createdApiKeyId}`, {
-    method: 'PATCH',
-    headers: authHeaders(session.access_token),
-    body: JSON.stringify({ description: 'updated by test' }),
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/api-keys/${createdApiKeyId}`,
+    {
+      method: 'PATCH',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({ description: 'updated by test' }),
+    },
+  )
   assertEquals(res.status, 200)
   const body = await res.json()
   assertEquals(body.description, 'updated by test')
 
-  const after = await countAuditRowsByAction('project.api_key_updated', testRef)
-  assertEquals(after - before, 1, 'PATCH must emit one project.api_key_updated audit row')
+  const after = await countAuditRowsByAction(
+    'project.api_key_updated',
+    testRef,
+  )
+  assertEquals(
+    after - before,
+    1,
+    'PATCH must emit one project.api_key_updated audit row',
+  )
 })
 
 // ── DELETE removes (soft-delete excludes from list) ──────
@@ -302,11 +290,15 @@ Deno.test('PATCH /v1/projects/{ref}/api-keys/{id} updates description', async ()
 Deno.test('DELETE /v1/projects/{ref}/api-keys/{id} removes the key', async () => {
   if (!testRef || createdApiKeyId === null) return
   const session = await getTestSession()
-  const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/api-keys/${createdApiKeyId}`, {
-    method: 'DELETE',
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/api-keys/${createdApiKeyId}`,
+    {
+      method: 'DELETE',
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 200)
+  await res.body?.cancel()
 
   const listRes = await fetch(`${V1_PROJECTS_URL}/${testRef}/api-keys`, {
     headers: authHeaders(session.access_token),
@@ -315,9 +307,12 @@ Deno.test('DELETE /v1/projects/{ref}/api-keys/{id} removes the key', async () =>
   const found = list.find((k: { id: number }) => k.id === createdApiKeyId)
   assertEquals(found, undefined, 'deleted key must not appear in active list')
 
-  const detailRes = await fetch(`${V1_PROJECTS_URL}/${testRef}/api-keys/${createdApiKeyId}`, {
-    headers: authHeaders(session.access_token),
-  })
+  const detailRes = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/api-keys/${createdApiKeyId}`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(detailRes.status, 404)
   await detailRes.body?.cancel()
 })
@@ -345,7 +340,7 @@ Deno.test(
     assertEquals(typeof service.api_key, 'string')
     assert(anon.tags.includes('anon'))
     assert(service.tags.includes('service_role'))
-  }
+  },
 )
 
 Deno.test(
@@ -362,7 +357,7 @@ Deno.test(
     const body = await res.json()
     assertEquals(body.code, 'self_hosted_unsupported')
     assertExists(body.message)
-  }
+  },
 )
 
 // ── /api-keys/temporary ──────────────────────────────────
@@ -380,7 +375,7 @@ Deno.test('POST /platform/projects/{ref}/api-keys/temporary returns short-lived 
   assertExists(body.api_key)
   assert(
     typeof body.api_key === 'string' && body.api_key.startsWith('sb_temp_'),
-    'temporary key should carry sb_temp_ prefix'
+    'temporary key should carry sb_temp_ prefix',
   )
   assertExists(body.api_key_alias)
   assertExists(body.expires_at)
@@ -399,15 +394,18 @@ let signingKeyBId: number | null = null
 Deno.test('POST /v1/projects/{ref}/config/auth/signing-keys creates first in_use key', async () => {
   if (!testRef) return
   const session = await getTestSession()
-  const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/config/auth/signing-keys`, {
-    method: 'POST',
-    headers: authHeaders(session.access_token),
-    body: JSON.stringify({
-      algorithm: 'HS256',
-      status: 'in_use',
-      public_jwk: { kty: 'oct', alg: 'HS256', kid: 'key-a' },
-    }),
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/config/auth/signing-keys`,
+    {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({
+        algorithm: 'HS256',
+        status: 'in_use',
+        public_jwk: { kty: 'oct', alg: 'HS256', kid: 'key-a' },
+      }),
+    },
+  )
   assertEquals(res.status, 201)
   const body = await res.json()
   assertExists(body.id)
@@ -421,42 +419,55 @@ Deno.test(
   async () => {
     if (!testRef) return
     const session = await getTestSession()
-    const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/config/auth/signing-keys`, {
-      method: 'POST',
-      headers: authHeaders(session.access_token),
-      body: JSON.stringify({ status: 'standby' }),
-    })
+    const res = await fetch(
+      `${V1_PROJECTS_URL}/${testRef}/config/auth/signing-keys`,
+      {
+        method: 'POST',
+        headers: authHeaders(session.access_token),
+        body: JSON.stringify({ status: 'standby' }),
+      },
+    )
     assertEquals(res.status, 400)
     await res.body?.cancel()
-  }
+  },
 )
 
 Deno.test('POST second in_use signing key demotes the previous one (active swap)', async () => {
   if (!testRef || signingKeyAId === null) return
   const session = await getTestSession()
 
-  const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/config/auth/signing-keys`, {
-    method: 'POST',
-    headers: authHeaders(session.access_token),
-    body: JSON.stringify({
-      algorithm: 'HS256',
-      active: true,
-      public_jwk: { kty: 'oct', alg: 'HS256', kid: 'key-b' },
-    }),
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/config/auth/signing-keys`,
+    {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({
+        algorithm: 'HS256',
+        active: true,
+        public_jwk: { kty: 'oct', alg: 'HS256', kid: 'key-b' },
+      }),
+    },
+  )
   assertEquals(res.status, 201)
   const bodyB = await res.json()
   assertEquals(bodyB.status, 'in_use')
   signingKeyBId = bodyB.id
 
-  const listRes = await fetch(`${V1_PROJECTS_URL}/${testRef}/config/auth/signing-keys`, {
-    headers: authHeaders(session.access_token),
-  })
+  const listRes = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/config/auth/signing-keys`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(listRes.status, 200)
   const list = await listRes.json()
   assert(Array.isArray(list))
   const inUse = list.filter((k: { status: string }) => k.status === 'in_use')
-  assertEquals(inUse.length, 1, 'exactly one signing key must be in_use per project')
+  assertEquals(
+    inUse.length,
+    1,
+    'exactly one signing key must be in_use per project',
+  )
   assertEquals(inUse[0].id, signingKeyBId)
 
   const previous = list.find((k: { id: number }) => k.id === signingKeyAId)
@@ -469,7 +480,7 @@ Deno.test('GET /v1/projects/{ref}/config/auth/signing-keys/{id} returns single k
   const session = await getTestSession()
   const res = await fetch(
     `${V1_PROJECTS_URL}/${testRef}/config/auth/signing-keys/${signingKeyBId}`,
-    { headers: authHeaders(session.access_token) }
+    { headers: authHeaders(session.access_token) },
   )
   assertEquals(res.status, 200)
   const body = await res.json()
@@ -489,15 +500,18 @@ Deno.test(
         method: 'PATCH',
         headers: authHeaders(session.access_token),
         body: JSON.stringify({ active: true }),
-      }
+      },
     )
     assertEquals(res.status, 200)
     const body = await res.json()
     assertEquals(body.status, 'in_use')
 
-    const listRes = await fetch(`${V1_PROJECTS_URL}/${testRef}/config/auth/signing-keys`, {
-      headers: authHeaders(session.access_token),
-    })
+    const listRes = await fetch(
+      `${V1_PROJECTS_URL}/${testRef}/config/auth/signing-keys`,
+      {
+        headers: authHeaders(session.access_token),
+      },
+    )
     const list = await listRes.json()
     const inUse = list.filter((k: { status: string }) => k.status === 'in_use')
     assertEquals(inUse.length, 1)
@@ -505,24 +519,34 @@ Deno.test(
 
     const other = list.find((k: { id: number }) => k.id === signingKeyBId)
     assertEquals(other.status, 'previously_used')
-  }
+  },
 )
 
 Deno.test('DELETE /v1/projects/{ref}/config/auth/signing-keys/{id} revokes the key', async () => {
   if (!testRef || signingKeyBId === null) return
   const session = await getTestSession()
-  const before = await countAuditRowsByAction('project.signing_key_revoked', testRef)
+  const before = await countAuditRowsByAction(
+    'project.signing_key_revoked',
+    testRef,
+  )
 
   const res = await fetch(
     `${V1_PROJECTS_URL}/${testRef}/config/auth/signing-keys/${signingKeyBId}`,
-    { method: 'DELETE', headers: authHeaders(session.access_token) }
+    { method: 'DELETE', headers: authHeaders(session.access_token) },
   )
   assertEquals(res.status, 200)
   const body = await res.json()
   assertEquals(body.status, 'revoked')
 
-  const after = await countAuditRowsByAction('project.signing_key_revoked', testRef)
-  assertEquals(after - before, 1, 'DELETE must emit one project.signing_key_revoked audit row')
+  const after = await countAuditRowsByAction(
+    'project.signing_key_revoked',
+    testRef,
+  )
+  assertEquals(
+    after - before,
+    1,
+    'DELETE must emit one project.signing_key_revoked audit row',
+  )
 })
 
 Deno.test(
@@ -530,26 +554,32 @@ Deno.test(
   async () => {
     if (!testRef) return
     const session = await getTestSession()
-    const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/config/auth/signing-keys/legacy`, {
-      headers: authHeaders(session.access_token),
-    })
+    const res = await fetch(
+      `${V1_PROJECTS_URL}/${testRef}/config/auth/signing-keys/legacy`,
+      {
+        headers: authHeaders(session.access_token),
+      },
+    )
     assertEquals(res.status, 200)
     const body = await res.json()
     assert(Array.isArray(body))
     assert(body.length >= 1)
     assertEquals(body[0].algorithm, 'HS256')
     assertEquals(body[0].status, 'in_use')
-  }
+  },
 )
 
 Deno.test('POST /v1/projects/{ref}/config/auth/signing-keys/legacy returns 501', async () => {
   if (!testRef) return
   const session = await getTestSession()
-  const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/config/auth/signing-keys/legacy`, {
-    method: 'POST',
-    headers: authHeaders(session.access_token),
-    body: '{}',
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/config/auth/signing-keys/legacy`,
+    {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: '{}',
+    },
+  )
   assertEquals(res.status, 501)
   const body = await res.json()
   assertEquals(body.code, 'self_hosted_unsupported')
@@ -565,23 +595,23 @@ Deno.test('POST /v1/projects/{ref}/config/auth/signing-keys/legacy returns 501',
 
 Deno.test('GET /v1/projects/{ref}/api-keys from non-member user is denied', async () => {
   if (!testRef) return
-  const { email, password } = await signUpDisposableUser()
-  const otherSession = await signIn(email, password)
+  const { email, password } = await createDisposableUser('apikeys-other')
+  const otherSession = await signInAs(email, password)
 
   const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/api-keys`, {
     headers: authHeaders(otherSession.access_token),
   })
   assert(
     res.status === 404 || res.status === 403,
-    `non-member should be denied (got ${res.status})`
+    `non-member should be denied (got ${res.status})`,
   )
   await res.body?.cancel()
 })
 
 Deno.test('POST /v1/projects/{ref}/api-keys from non-member user is denied', async () => {
   if (!testRef) return
-  const { email, password } = await signUpDisposableUser()
-  const otherSession = await signIn(email, password)
+  const { email, password } = await createDisposableUser('apikeys-other')
+  const otherSession = await signInAs(email, password)
 
   const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/api-keys`, {
     method: 'POST',
@@ -590,7 +620,7 @@ Deno.test('POST /v1/projects/{ref}/api-keys from non-member user is denied', asy
   })
   assert(
     res.status === 404 || res.status === 403,
-    `non-member should be denied (got ${res.status})`
+    `non-member should be denied (got ${res.status})`,
   )
   await res.body?.cancel()
 })

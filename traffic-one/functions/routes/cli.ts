@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import { createScopedAccessToken } from '../services/access-token.service.ts'
@@ -26,7 +26,7 @@ export async function handleCli(
   pool: Pool,
   profileId: number,
   gotrueId: string,
-  email: string
+  email: string,
 ): Promise<Response> {
   if (method === 'POST' && path === '/login') {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
@@ -46,7 +46,7 @@ export async function handleCli(
         expires_at: expiresAt,
       },
       gotrueId,
-      auditContext
+      auditContext,
     )
 
     return Response.json(token, { status: 201, headers: corsHeaders })

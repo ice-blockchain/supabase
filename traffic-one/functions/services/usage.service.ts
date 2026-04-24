@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import type {
   DailyUsageEntry,
@@ -9,11 +9,18 @@ import type {
   UsageEntry,
   UsageMetric,
 } from '../types/api.ts'
-import { queryLogflare } from './logflare.client.ts'
+import { type LogflareBackend, queryLogflare } from './logflare.client.ts'
 import { ALL_METRICS, calculateCost, getEffectivePricing } from './pricing.config.ts'
 
 interface UsageOpts {
   projectRef?: string
+  // L5: when the caller has already resolved the project row (e.g. the
+  // organizations.ts /usage handler looks it up for the cross-org membership
+  // check), pass its `name` in here so allocation labels show the real
+  // project name. Previously we fell back to `DEFAULT_PROJECT_NAME` / "Default
+  // Project", which made Studio's per-project usage panel misrepresent the
+  // selected project when multiple projects existed in the org.
+  projectName?: string
   start?: string
   end?: string
 }
@@ -74,13 +81,15 @@ function dateRange(opts: UsageOpts): { isoStart: string; isoEnd: string } {
 }
 
 async function safeLogflare(
+  backend: LogflareBackend | undefined,
   sql: string,
   isoStart: string,
   isoEnd: string,
-  projectRef: string
+  sourceName: string,
 ): Promise<Record<string, unknown>[]> {
+  if (!backend) return []
   try {
-    return await queryLogflare(sql, isoStart, isoEnd, projectRef)
+    return await queryLogflare(backend, sql, isoStart, isoEnd, sourceName)
   } catch (err) {
     console.error('Logflare query error:', err)
     return []
@@ -98,7 +107,8 @@ export async function getOrgUsage(
   pool: Pool,
   orgId: number,
   planId: string,
-  opts: UsageOpts = {}
+  opts: UsageOpts = {},
+  backend?: LogflareBackend,
 ): Promise<OrgUsageResponse> {
   const projectRef = opts.projectRef ?? 'default'
   const { isoStart, isoEnd } = dateRange(opts)
@@ -109,12 +119,14 @@ export async function getOrgUsage(
     queryStorageSize(pool),
     Promise.all([
       safeLogflare(
+        backend,
         'SELECT COUNT(DISTINCT id) AS cnt FROM function_edge_logs',
         isoStart,
         isoEnd,
-        projectRef
+        projectRef,
       ),
       safeLogflare(
+        backend,
         `SELECT SUM(CAST(COALESCE(r.content_length, '0') AS int64)) AS total_bytes
          FROM edge_logs t
          CROSS JOIN UNNEST(metadata) AS m
@@ -122,23 +134,31 @@ export async function getOrgUsage(
          CROSS JOIN UNNEST(response.headers) AS r`,
         isoStart,
         isoEnd,
-        projectRef
+        projectRef,
       ),
       safeLogflare(
+        backend,
         `SELECT COUNT(DISTINCT JSON_VALUE(event_message, '$.actor_id')) AS cnt FROM auth_logs`,
         isoStart,
         isoEnd,
-        projectRef
+        projectRef,
       ),
-      safeLogflare('SELECT COUNT(*) AS cnt FROM realtime_logs', isoStart, isoEnd, projectRef),
       safeLogflare(
+        backend,
+        'SELECT COUNT(*) AS cnt FROM realtime_logs',
+        isoStart,
+        isoEnd,
+        projectRef,
+      ),
+      safeLogflare(
+        backend,
         `SELECT COUNT(*) AS cnt FROM edge_logs t
          CROSS JOIN UNNEST(metadata) AS m
          CROSS JOIN UNNEST(m.request) AS request
          WHERE request.path LIKE '/storage/v1/render/%'`,
         isoStart,
         isoEnd,
-        projectRef
+        projectRef,
       ),
     ]),
   ])
@@ -161,7 +181,12 @@ export async function getOrgUsage(
     STORAGE_IMAGES_TRANSFORMED: imagesTransformed,
   }
 
-  const projectName = Deno.env.get('DEFAULT_PROJECT_NAME') || 'Default Project'
+  // L5: prefer the caller-supplied project name (resolved from
+  // `traffic.projects` in the route layer) over the platform-wide
+  // `DEFAULT_PROJECT_NAME` env var. The env var remains the fallback for the
+  // `projectRef = 'default'` case (no project_ref query param), matching the
+  // legacy single-project allocation label.
+  const projectName = opts.projectName ?? Deno.env.get('DEFAULT_PROJECT_NAME') ?? 'Default Project'
   const usages: UsageEntry[] = ALL_METRICS.map((metric) => {
     const usage = metricValues[metric] ?? 0
     const pricing = getEffectivePricing(planId, metric, overrides)
@@ -190,28 +215,19 @@ export async function getOrgUsage(
 
 export async function getOrgDailyUsage(
   pool: Pool,
-  orgId: number,
-  opts: UsageOpts = {}
+  _orgId: number,
+  opts: UsageOpts = {},
+  backend?: LogflareBackend,
 ): Promise<OrgDailyUsageResponse> {
   const projectRef = opts.projectRef ?? 'default'
   const { isoStart, isoEnd } = dateRange(opts)
-
-  const dailyMetrics: UsageMetric[] = [
-    'DATABASE_SIZE',
-    'STORAGE_SIZE',
-    'EGRESS',
-    'FUNCTION_INVOCATIONS',
-    'MONTHLY_ACTIVE_USERS',
-    'REALTIME_MESSAGE_COUNT',
-    'REALTIME_PEAK_CONNECTIONS',
-    'STORAGE_IMAGES_TRANSFORMED',
-  ]
 
   const [dbSize, storageSize, egressDaily, funcDaily, mauDaily, rtMsgDaily, imgDaily] =
     await Promise.all([
       queryDatabaseSize(pool),
       queryStorageSize(pool),
       safeLogflare(
+        backend,
         `SELECT
         CAST(timestamp_trunc(t.timestamp, day) AS datetime) AS day,
         SUM(CAST(COALESCE(r.content_length, '0') AS int64)) AS total_bytes,
@@ -231,29 +247,32 @@ export async function getOrgDailyUsage(
       GROUP BY day ORDER BY day`,
         isoStart,
         isoEnd,
-        projectRef
+        projectRef,
       ),
       safeLogflare(
+        backend,
         `SELECT CAST(timestamp_trunc(t.timestamp, day) AS datetime) AS day, COUNT(DISTINCT id) AS cnt
        FROM function_edge_logs t GROUP BY day ORDER BY day`,
         isoStart,
         isoEnd,
-        projectRef
+        projectRef,
       ),
       safeLogflare(
+        backend,
         `SELECT CAST(timestamp_trunc(t.timestamp, day) AS datetime) AS day,
               COUNT(DISTINCT JSON_VALUE(event_message, '$.actor_id')) AS cnt
        FROM auth_logs t GROUP BY day ORDER BY day`,
         isoStart,
         isoEnd,
-        projectRef
+        projectRef,
       ),
       safeLogflare(
+        backend,
         `SELECT CAST(timestamp_trunc(t.timestamp, day) AS datetime) AS day, COUNT(*) AS cnt
        FROM realtime_logs t GROUP BY day ORDER BY day`,
         isoStart,
         isoEnd,
-        projectRef
+        projectRef,
       ),
       // M9: REALTIME_PEAK_CONNECTIONS is intentionally not queried. On hosted
       // Supabase, peak-concurrent-connections is derived from connection/
@@ -265,6 +284,7 @@ export async function getOrgDailyUsage(
       // day instead. See usage-service-test.ts for the corresponding
       // assertion.
       safeLogflare(
+        backend,
         `SELECT CAST(timestamp_trunc(t.timestamp, day) AS datetime) AS day, COUNT(*) AS cnt
        FROM edge_logs t
        CROSS JOIN UNNEST(metadata) AS m
@@ -273,7 +293,7 @@ export async function getOrgDailyUsage(
        GROUP BY day ORDER BY day`,
         isoStart,
         isoEnd,
-        projectRef
+        projectRef,
       ),
     ])
 
@@ -390,7 +410,7 @@ function getDaysBetween(isoStart: string, isoEnd: string): Date[] {
 
 function findDayRow(
   rows: Record<string, unknown>[],
-  targetDay: Date
+  targetDay: Date,
 ): Record<string, unknown> | undefined {
   const targetStr = targetDay.toISOString().slice(0, 10)
   return rows.find((r) => {

@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import type {
   CreateInvitationBody,
@@ -54,7 +54,7 @@ interface FreeProjectLimitRow {
 export async function getMemberHighestRoleId(
   pool: Pool,
   orgId: number,
-  profileId: number
+  profileId: number,
 ): Promise<number> {
   const connection = await pool.connect()
   try {
@@ -113,7 +113,7 @@ export async function deleteMember(
   targetGotrueId: string,
   actorProfileId: number,
   gotrueId: string,
-  auditCtx: AuditContext
+  auditCtx: AuditContext,
 ): Promise<{ success: boolean; error?: string; status?: number }> {
   const connection = await pool.connect()
   try {
@@ -189,7 +189,7 @@ export async function assignMemberRole(
   projects: string[] | undefined,
   actorProfileId: number,
   gotrueId: string,
-  auditCtx: AuditContext
+  auditCtx: AuditContext,
 ): Promise<{ success: boolean; error?: string; status?: number }> {
   const connection = await pool.connect()
   try {
@@ -246,7 +246,7 @@ export async function updateMemberRole(
   projectRefs: string[],
   actorProfileId: number,
   gotrueId: string,
-  auditCtx: AuditContext
+  auditCtx: AuditContext,
 ): Promise<{ success: boolean; error?: string; status?: number }> {
   const connection = await pool.connect()
   try {
@@ -306,7 +306,7 @@ export async function unassignMemberRole(
   roleId: number,
   actorProfileId: number,
   gotrueId: string,
-  auditCtx: AuditContext
+  auditCtx: AuditContext,
 ): Promise<{ success: boolean; error?: string; status?: number }> {
   const connection = await pool.connect()
   try {
@@ -397,7 +397,7 @@ export async function createInvitation(
   body: CreateInvitationBody,
   actorProfileId: number,
   gotrueId: string,
-  auditCtx: AuditContext
+  auditCtx: AuditContext,
 ): Promise<{ invitation?: InvitationItem; error?: string; status?: number }> {
   const connection = await pool.connect()
   try {
@@ -460,7 +460,7 @@ export async function deleteInvitation(
   invitationId: number,
   actorProfileId: number,
   gotrueId: string,
-  auditCtx: AuditContext
+  auditCtx: AuditContext,
 ): Promise<boolean> {
   const connection = await pool.connect()
   try {
@@ -502,8 +502,8 @@ export async function deleteInvitation(
 export async function getInvitationByToken(
   pool: Pool,
   token: string,
-  gotrueId: string,
-  email: string
+  _gotrueId: string,
+  email: string,
 ): Promise<InvitationByTokenResponse> {
   const connection = await pool.connect()
   try {
@@ -555,7 +555,7 @@ export async function acceptInvitation(
   token: string,
   profileId: number,
   gotrueId: string,
-  auditCtx: AuditContext
+  auditCtx: AuditContext,
 ): Promise<{ success: boolean; error?: string; status?: number }> {
   const connection = await pool.connect()
   try {
@@ -664,7 +664,7 @@ export async function listRoles(pool: Pool, _orgId: number): Promise<Organizatio
 
 export async function getMfaEnforcement(
   pool: Pool,
-  orgId: number
+  orgId: number,
 ): Promise<MfaEnforcementResponse> {
   const connection = await pool.connect()
   try {
@@ -683,7 +683,7 @@ export async function updateMfaEnforcement(
   enforced: boolean,
   profileId: number,
   gotrueId: string,
-  auditCtx: AuditContext
+  auditCtx: AuditContext,
 ): Promise<MfaEnforcementResponse> {
   const connection = await pool.connect()
   try {
@@ -721,7 +721,7 @@ export async function updateMfaEnforcement(
 
 export async function getMembersAtFreeProjectLimit(
   pool: Pool,
-  orgId: number
+  orgId: number,
 ): Promise<MemberWithFreeProjectLimit[]> {
   const connection = await pool.connect()
   try {

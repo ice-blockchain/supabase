@@ -1,5 +1,5 @@
-// Shared filesystem scanner for Supabase Edge Functions living under the
-// self-hosted Deno runtime mount point.
+// Shared filesystem scanner + remote dispatcher for Supabase Edge
+// Functions.
 //
 // Background (L4): the read handlers in `routes/projects.ts` and the
 // mutation handlers in `routes/edge-function-mutations.ts` each used to
@@ -11,14 +11,21 @@
 // `verify_jwt`, `entrypoint_path`) over the filesystem scan, while the
 // read side returned only the raw scan result.
 //
-// This module is the single source of truth. `parseFunctionDir(slug)` is
-// equivalent to the old read-side helper; `parseFunctionDir(slug, meta)`
-// layers the meta overrides exactly like the mutation-side copy. Callers
-// that need the meta-aware form pass the result of `loadMeta(slug)`.
+// Phase 3 (per-project backends): when `backend.endpoint !== SUPABASE_URL`
+// the filesystem view no longer applies — the project's functions live on
+// a runtime owned by the external orchestrator. The remote helpers
+// (`listRemoteFunctions`, `deployRemoteFunction`, ...) proxy to
+// `${backend.functionsApiUrl}/_meta[...]` / `/_deploy` with the project's
+// service key. The *shared-stack* path (local Docker, single tenant)
+// continues to use the filesystem; `routes/edge-function-mutations.ts`
+// and `routes/projects.ts` pick the branch at request-time via
+// `isSharedStack(backend)`.
 //
 // We intentionally keep the filesystem constant (`FUNCTIONS_DIR`) and the
 // `FunctionEntry` / `FunctionMeta` types exported from here so there is
 // only one place to update when the runtime mount path changes.
+
+import { type FetchLike, fetchProjectUrl, type ProjectBackend } from './project-backend.service.ts'
 
 export const FUNCTIONS_DIR = '/home/deno/functions'
 
@@ -66,7 +73,7 @@ export async function loadFunctionMeta(slug: string): Promise<FunctionMeta> {
 // matches the shape returned by a subsequent GET.
 export async function parseFunctionDir(
   slug: string,
-  meta: FunctionMeta = {}
+  meta: FunctionMeta = {},
 ): Promise<FunctionEntry | null> {
   const dirPath = `${FUNCTIONS_DIR}/${slug}`
 
@@ -102,4 +109,177 @@ export async function parseFunctionDir(
   } catch {
     return null
   }
+}
+
+// ── Remote dispatcher (api mode) ────────────────────────────────────────────
+//
+// Per-project functions runtime contract. `functionsApiUrl` is expected to
+// expose a small admin surface that mirrors what our filesystem scanner
+// produces. Each helper fails soft — network errors bubble up as `null`
+// for GETs and rethrow for writes so the mutation route can audit the
+// failure and surface a 500.
+//
+// Endpoints:
+//   GET    {base}/_meta            → FunctionEntry[]
+//   GET    {base}/_meta/{slug}     → FunctionEntry | 404
+//   GET    {base}/_meta/{slug}/body → Array<{ name, content }> | 404
+//   POST   {base}/_deploy          → FunctionEntry | 500
+//   PATCH  {base}/_meta/{slug}     → FunctionEntry | 404
+//   DELETE {base}/_meta/{slug}     → { slug, deleted } | 404
+
+export interface DeployRemoteInput {
+  slug: string
+  name?: string
+  verify_jwt?: boolean
+  entrypoint_path?: string
+  import_map_path?: string
+  files: Array<{ name: string; content: string }>
+}
+
+function baseFunctionsUrl(backend: ProjectBackend): string {
+  return backend.functionsApiUrl.replace(/\/$/, '')
+}
+
+export async function listRemoteFunctions(
+  backend: ProjectBackend,
+  fetchImpl: FetchLike = fetch,
+): Promise<FunctionEntry[]> {
+  if (!backend.functionsApiUrl) return []
+  try {
+    const res = await fetchProjectUrl(
+      backend,
+      `${baseFunctionsUrl(backend)}/_meta`,
+      { method: 'GET', headers: { Accept: 'application/json' } },
+      fetchImpl,
+    )
+    if (!res.ok) {
+      await res.body?.cancel()
+      return []
+    }
+    const body = await res.json().catch(() => null)
+    return Array.isArray(body) ? (body as FunctionEntry[]) : []
+  } catch (err) {
+    console.warn('listRemoteFunctions failed:', err)
+    return []
+  }
+}
+
+export async function getRemoteFunction(
+  backend: ProjectBackend,
+  slug: string,
+  fetchImpl: FetchLike = fetch,
+): Promise<FunctionEntry | null> {
+  if (!backend.functionsApiUrl) return null
+  try {
+    const res = await fetchProjectUrl(
+      backend,
+      `${baseFunctionsUrl(backend)}/_meta/${encodeURIComponent(slug)}`,
+      { method: 'GET', headers: { Accept: 'application/json' } },
+      fetchImpl,
+    )
+    if (!res.ok) {
+      await res.body?.cancel()
+      return null
+    }
+    const body = await res.json().catch(() => null)
+    return body && typeof body === 'object' ? (body as FunctionEntry) : null
+  } catch (err) {
+    console.warn('getRemoteFunction failed:', err)
+    return null
+  }
+}
+
+export async function getRemoteFunctionBody(
+  backend: ProjectBackend,
+  slug: string,
+  fetchImpl: FetchLike = fetch,
+): Promise<Array<{ name: string; content: string }> | null> {
+  if (!backend.functionsApiUrl) return null
+  try {
+    const res = await fetchProjectUrl(
+      backend,
+      `${baseFunctionsUrl(backend)}/_meta/${encodeURIComponent(slug)}/body`,
+      { method: 'GET', headers: { Accept: 'application/json' } },
+      fetchImpl,
+    )
+    if (!res.ok) {
+      await res.body?.cancel()
+      return null
+    }
+    const body = await res.json().catch(() => null)
+    return Array.isArray(body) ? (body as Array<{ name: string; content: string }>) : null
+  } catch (err) {
+    console.warn('getRemoteFunctionBody failed:', err)
+    return null
+  }
+}
+
+export async function deployRemoteFunction(
+  backend: ProjectBackend,
+  input: DeployRemoteInput,
+  fetchImpl: FetchLike = fetch,
+): Promise<{ ok: true; entry: FunctionEntry } | { ok: false; status: number; message: string }> {
+  if (!backend.functionsApiUrl) {
+    return { ok: false, status: 501, message: 'functions API url not configured' }
+  }
+  const res = await fetchProjectUrl(
+    backend,
+    `${baseFunctionsUrl(backend)}/_deploy`,
+    {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+      body: JSON.stringify(input),
+    },
+    fetchImpl,
+  )
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    return { ok: false, status: res.status, message: text || `deploy failed (${res.status})` }
+  }
+  const body = await res.json().catch(() => null)
+  if (!body || typeof body !== 'object') {
+    return { ok: false, status: 502, message: 'invalid deploy response' }
+  }
+  return { ok: true, entry: body as FunctionEntry }
+}
+
+export async function patchRemoteFunction(
+  backend: ProjectBackend,
+  slug: string,
+  meta: FunctionMeta,
+  fetchImpl: FetchLike = fetch,
+): Promise<FunctionEntry | null> {
+  if (!backend.functionsApiUrl) return null
+  const res = await fetchProjectUrl(
+    backend,
+    `${baseFunctionsUrl(backend)}/_meta/${encodeURIComponent(slug)}`,
+    {
+      method: 'PATCH',
+      headers: { Accept: 'application/json' },
+      body: JSON.stringify(meta),
+    },
+    fetchImpl,
+  )
+  if (!res.ok) {
+    await res.body?.cancel()
+    return null
+  }
+  const body = await res.json().catch(() => null)
+  return body && typeof body === 'object' ? (body as FunctionEntry) : null
+}
+
+export async function deleteRemoteFunction(
+  backend: ProjectBackend,
+  slug: string,
+  fetchImpl: FetchLike = fetch,
+): Promise<boolean> {
+  if (!backend.functionsApiUrl) return false
+  const res = await fetchProjectUrl(
+    backend,
+    `${baseFunctionsUrl(backend)}/_meta/${encodeURIComponent(slug)}`,
+    { method: 'DELETE', headers: { Accept: 'application/json' } },
+    fetchImpl,
+  )
+  await res.body?.cancel()
+  return res.ok
 }

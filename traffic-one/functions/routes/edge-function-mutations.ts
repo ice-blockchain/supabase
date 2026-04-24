@@ -1,15 +1,25 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import {
+  deleteRemoteFunction,
+  deployRemoteFunction,
+  type FunctionMeta,
   FUNCTIONS_DIR,
   loadFunctionMeta,
   parseFunctionDir,
-  type FunctionEntry,
-  type FunctionMeta,
+  patchRemoteFunction,
 } from '../services/edge-functions.service.ts'
+import {
+  getProjectBackend,
+  isSharedStack,
+  type ProjectBackend,
+  ProjectBackendNotProvisionedError,
+} from '../services/project-backend.service.ts'
 import { getProjectByRef } from '../services/project.service.ts'
 import { getClientIp } from '../utils/client-ip.ts'
+import { notProvisionedResponse } from '../utils/project-backend-response.ts'
+import { assertValidRef } from '../utils/ref-validation.ts'
 
 // ── Constants ──────────────────────────────────────────────
 //
@@ -64,7 +74,7 @@ function badRequestResponse(message: string, code?: string): Response {
 function reservedSlugResponse(): Response {
   return Response.json(
     { code: 'reserved_slug', message: 'This slug is reserved' },
-    { status: 403, headers: corsHeaders }
+    { status: 403, headers: corsHeaders },
   )
 }
 
@@ -75,7 +85,7 @@ function invalidSlugResponse(): Response {
 function fsReadonlyResponse(): Response {
   return Response.json(
     { code: 'fs_readonly', message: FS_READONLY_MESSAGE },
-    { status: 503, headers: corsHeaders }
+    { status: 503, headers: corsHeaders },
   )
 }
 
@@ -131,7 +141,11 @@ async function writeAudit(pool: Pool, params: AuditParams): Promise<void> {
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${params.profileId}, ${params.organizationId}, ${params.action},
-        ${JSON.stringify([{ method: params.method, route: params.route, status: params.status }])}::jsonb,
+        ${
+      JSON.stringify([
+        { method: params.method, route: params.route, status: params.status },
+      ])
+    }::jsonb,
         ${params.gotrueId}, 'user',
         ${JSON.stringify([{ email: params.email, ip: params.ip }])}::jsonb,
         ${params.target}, '{}'::jsonb, now()
@@ -230,8 +244,8 @@ async function parseDeployBody(req: Request): Promise<DeployInput | Response> {
   const rawFiles = Array.isArray(body.body)
     ? body.body
     : Array.isArray(body.files)
-      ? body.files
-      : []
+    ? body.files
+    : []
   for (const f of rawFiles as unknown[]) {
     if (f && typeof f === 'object') {
       const entry = f as { name?: unknown; content?: unknown }
@@ -250,7 +264,8 @@ async function handleDeploy(
   req: Request,
   pool: Pool,
   project: { id: number; ref: string; organization_id: number },
-  ctx: RequestContext
+  backend: ProjectBackend,
+  ctx: RequestContext,
 ): Promise<Response> {
   const parsed = await parseDeployBody(req)
   if (parsed instanceof Response) return parsed
@@ -261,7 +276,47 @@ async function handleDeploy(
   if (!SLUG_PATTERN.test(slug)) return invalidSlugResponse()
   if (RESERVED_SLUGS.has(slug)) return reservedSlugResponse()
   if (files.length === 0) return badRequestResponse('at least one file is required')
+  for (const file of files) {
+    if (!sanitizeFilename(file.name)) {
+      return badRequestResponse(`invalid filename: ${file.name}`)
+    }
+  }
 
+  // Per-project path: proxy to the project's runtime over HTTPS. The
+  // orchestrator-owned service owns the filesystem, so we never touch disk
+  // here. Audit on success.
+  if (!isSharedStack(backend)) {
+    const result = await deployRemoteFunction(backend, {
+      slug,
+      name,
+      verify_jwt,
+      entrypoint_path,
+      import_map_path,
+      files,
+    })
+    if (result.ok !== true) {
+      return Response.json(
+        { message: result.message },
+        { status: result.status, headers: corsHeaders },
+      )
+    }
+    await writeAudit(pool, {
+      profileId: ctx.profileId,
+      organizationId: project.organization_id,
+      gotrueId: ctx.gotrueId,
+      email: ctx.email,
+      ip: ctx.ip,
+      method: ctx.method,
+      route: `/v1/projects/${project.ref}/functions/deploy`,
+      status: 201,
+      action: 'project.edge_function_deployed',
+      target: auditTarget(project.ref, slug),
+    }).catch((err) => console.error('edge_function_deployed audit insert failed:', err))
+    return Response.json(result.entry, { status: 201, headers: corsHeaders })
+  }
+
+  // Shared-stack path: traffic-one owns the filesystem mount and writes
+  // directly. This is the local Docker / single-tenant mode.
   if (!(await isFunctionsDirWritable())) return fsReadonlyResponse()
 
   const dir = `${FUNCTIONS_DIR}/${slug}`
@@ -313,7 +368,7 @@ async function handleDeploy(
     console.error('edge function deploy error:', err)
     return Response.json(
       { message: 'Failed to deploy function' },
-      { status: 500, headers: corsHeaders }
+      { status: 500, headers: corsHeaders },
     )
   }
 }
@@ -323,19 +378,11 @@ async function handlePatch(
   slug: string,
   pool: Pool,
   project: { id: number; ref: string; organization_id: number },
-  ctx: RequestContext
+  backend: ProjectBackend,
+  ctx: RequestContext,
 ): Promise<Response> {
   if (!SLUG_PATTERN.test(slug)) return invalidSlugResponse()
   if (RESERVED_SLUGS.has(slug)) return reservedSlugResponse()
-  if (!(await isFunctionsDirWritable())) return fsReadonlyResponse()
-
-  const dir = `${FUNCTIONS_DIR}/${slug}`
-  try {
-    const stat = await Deno.stat(dir)
-    if (!stat.isDirectory) return notFoundResponse('Function not found')
-  } catch {
-    return notFoundResponse('Function not found')
-  }
 
   let body: Record<string, unknown>
   try {
@@ -347,21 +394,51 @@ async function handlePatch(
     return badRequestResponse('Invalid body')
   }
 
-  const existing = await loadFunctionMeta(slug)
-  const updates: FunctionMeta = { ...existing }
+  const updates: FunctionMeta = {}
   if (typeof body.name === 'string') updates.name = body.name
   if (typeof body.verify_jwt === 'boolean') updates.verify_jwt = body.verify_jwt
   if (typeof body.entrypoint_path === 'string') updates.entrypoint_path = body.entrypoint_path
   if (typeof body.import_map_path === 'string') updates.import_map_path = body.import_map_path
 
+  if (!isSharedStack(backend)) {
+    const entry = await patchRemoteFunction(backend, slug, updates)
+    if (!entry) return notFoundResponse('Function not found')
+    await writeAudit(pool, {
+      profileId: ctx.profileId,
+      organizationId: project.organization_id,
+      gotrueId: ctx.gotrueId,
+      email: ctx.email,
+      ip: ctx.ip,
+      method: ctx.method,
+      route: `/v1/projects/${project.ref}/functions/${slug}`,
+      status: 200,
+      action: 'project.edge_function_updated',
+      target: auditTarget(project.ref, slug),
+    }).catch((err) => console.error('edge_function_updated audit insert failed:', err))
+    return Response.json(entry, { headers: corsHeaders })
+  }
+
+  if (!(await isFunctionsDirWritable())) return fsReadonlyResponse()
+
+  const dir = `${FUNCTIONS_DIR}/${slug}`
   try {
-    await writeMeta(slug, updates)
+    const stat = await Deno.stat(dir)
+    if (!stat.isDirectory) return notFoundResponse('Function not found')
+  } catch {
+    return notFoundResponse('Function not found')
+  }
+
+  const existing = await loadFunctionMeta(slug)
+  const merged: FunctionMeta = { ...existing, ...updates }
+
+  try {
+    await writeMeta(slug, merged)
   } catch (err) {
     if (isReadonlyFsError(err)) return fsReadonlyResponse()
     throw err
   }
 
-  const entry = await parseFunctionDir(slug, updates)
+  const entry = await parseFunctionDir(slug, merged)
   if (!entry) return notFoundResponse('Function not found')
 
   await writeAudit(pool, {
@@ -384,10 +461,30 @@ async function handleDelete(
   slug: string,
   pool: Pool,
   project: { id: number; ref: string; organization_id: number },
-  ctx: RequestContext
+  backend: ProjectBackend,
+  ctx: RequestContext,
 ): Promise<Response> {
   if (!SLUG_PATTERN.test(slug)) return invalidSlugResponse()
   if (RESERVED_SLUGS.has(slug)) return reservedSlugResponse()
+
+  if (!isSharedStack(backend)) {
+    const ok = await deleteRemoteFunction(backend, slug)
+    if (!ok) return notFoundResponse('Function not found')
+    await writeAudit(pool, {
+      profileId: ctx.profileId,
+      organizationId: project.organization_id,
+      gotrueId: ctx.gotrueId,
+      email: ctx.email,
+      ip: ctx.ip,
+      method: ctx.method,
+      route: `/v1/projects/${project.ref}/functions/${slug}`,
+      status: 200,
+      action: 'project.edge_function_deleted',
+      target: auditTarget(project.ref, slug),
+    }).catch((err) => console.error('edge_function_deleted audit insert failed:', err))
+    return Response.json({ slug, deleted: true }, { headers: corsHeaders })
+  }
+
   if (!(await isFunctionsDirWritable())) return fsReadonlyResponse()
 
   const dir = `${FUNCTIONS_DIR}/${slug}`
@@ -435,7 +532,7 @@ export async function handleEdgeFunctionMutations(
   pool: Pool,
   profileId: number,
   gotrueId: string,
-  email: string
+  email: string,
 ): Promise<Response> {
   const deployMatch = path.match(/^\/([^/]+)\/functions\/deploy\/?$/)
   const slugMatch = path.match(/^\/([^/]+)\/functions\/([^/]+)\/?$/)
@@ -446,9 +543,24 @@ export async function handleEdgeFunctionMutations(
 
   const ref = (deployMatch ?? slugMatch)![1]
 
+  // L4: malformed ref → 400 before we touch the DB, the backend resolver,
+  // or the functions filesystem. Applies to both `/deploy` and `/{slug}`.
+  const bad = assertValidRef(ref)
+  if (bad) return bad
+
   const project = await getProjectByRef(pool, ref, profileId)
   if (!project) {
     return notFoundResponse('Project not found')
+  }
+
+  let backend: ProjectBackend
+  try {
+    backend = await getProjectBackend(ref, pool)
+  } catch (err) {
+    if (err instanceof ProjectBackendNotProvisionedError) {
+      return notProvisionedResponse(err)
+    }
+    throw err
   }
 
   const ip = getClientIp(req)
@@ -456,12 +568,12 @@ export async function handleEdgeFunctionMutations(
 
   if (deployMatch) {
     if (method !== 'POST') return methodNotAllowedResponse()
-    return handleDeploy(req, pool, project, ctx)
+    return handleDeploy(req, pool, project, backend, ctx)
   }
 
   const slug = slugMatch![2]
 
-  if (method === 'PATCH') return handlePatch(req, slug, pool, project, ctx)
-  if (method === 'DELETE') return handleDelete(slug, pool, project, ctx)
+  if (method === 'PATCH') return handlePatch(req, slug, pool, project, backend, ctx)
+  if (method === 'DELETE') return handleDelete(slug, pool, project, backend, ctx)
   return methodNotAllowedResponse()
 }

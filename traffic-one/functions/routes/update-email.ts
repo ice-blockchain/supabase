@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 import { corsHeaders } from '../index.ts'
@@ -13,7 +13,7 @@ export async function handleUpdateEmail(
   pool: Pool,
   gotrueId: string,
   email: string,
-  _profileId: number
+  _profileId: number,
 ): Promise<Response> {
   if (method !== 'PUT') {
     return Response.json(
@@ -21,7 +21,7 @@ export async function handleUpdateEmail(
       {
         status: 405,
         headers: corsHeaders,
-      }
+      },
     )
   }
 
@@ -34,18 +34,18 @@ export async function handleUpdateEmail(
       {
         status: 400,
         headers: corsHeaders,
-      }
+      },
     )
   }
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
-  const serviceKey =
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_SERVICE_KEY')
+  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ??
+    Deno.env.get('SUPABASE_SERVICE_KEY')
 
   if (!supabaseUrl || !serviceKey) {
     return Response.json(
       { message: 'Server misconfigured: missing SUPABASE_SERVICE_ROLE_KEY' },
-      { status: 500, headers: corsHeaders }
+      { status: 500, headers: corsHeaders },
     )
   }
 
@@ -67,7 +67,7 @@ export async function handleUpdateEmail(
       {
         status: error.status ?? 500,
         headers: corsHeaders,
-      }
+      },
     )
   }
 

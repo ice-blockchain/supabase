@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 // Vault-backed per-project secret storage.
 //
@@ -52,7 +52,7 @@ export async function createSecret(
   pool: Pool,
   projectRef: string,
   name: string,
-  value: string
+  value: string,
 ): Promise<SecretUpsertResult> {
   const connection = await pool.connect()
   try {
@@ -118,7 +118,7 @@ export async function createSecret(
 
 export async function listSecretNames(
   pool: Pool,
-  projectRef: string
+  projectRef: string,
 ): Promise<ProjectSecretInfo[]> {
   const connection = await pool.connect()
   try {
@@ -178,7 +178,7 @@ export async function deleteSecret(pool: Pool, projectRef: string, name: string)
 export async function decryptSecretInternal(
   pool: Pool,
   projectRef: string,
-  name: string
+  name: string,
 ): Promise<string | null> {
   const connection = await pool.connect()
   try {

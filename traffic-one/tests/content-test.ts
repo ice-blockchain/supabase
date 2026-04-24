@@ -1,19 +1,24 @@
-import { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 import { assert, assertEquals, assertExists } from 'jsr:@std/assert@1'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 import 'jsr:@std/dotenv/load'
 
+import { createDisposableUser, signInAs } from './_helpers/test-user.ts'
+
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!
 const superuserDbUrl = Deno.env.get('SUPERUSER_DB_URL')!
 const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
 })
 
 const PROJECTS_URL = `${supabaseUrl}/api/platform/projects`
 const ORG_URL = `${supabaseUrl}/api/platform/organizations`
-const SIGNUP_URL = `${supabaseUrl}/api/platform/signup`
 
 function contentUrl(ref: string, sub = ''): string {
   return `${PROJECTS_URL}/${ref}/content${sub}`
@@ -28,7 +33,9 @@ async function getTestSession() {
     password: 'test-password',
   })
   if (error || !session) {
-    throw new Error(`Failed to sign in test user: ${error?.message ?? 'no session'}`)
+    throw new Error(
+      `Failed to sign in test user: ${error?.message ?? 'no session'}`,
+    )
   }
   return session
 }
@@ -40,53 +47,10 @@ function authHeaders(token: string): Record<string, string> {
   }
 }
 
-async function signUpDisposableUser(): Promise<{ email: string; password: string }> {
-  const email = `content-other-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`
-  const password = 'Test1234!'
-  const res = await fetch(SIGNUP_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email,
-      password,
-      hcaptchaToken: null,
-      redirectTo: 'http://localhost:8000',
-    }),
-  })
-  await res.body?.cancel()
-  assert(res.status === 201 || res.status === 200, `signup failed: ${res.status}`)
-
-  const adminPool = new Pool(superuserDbUrl, 1, true)
-  try {
-    const connection = await adminPool.connect()
-    try {
-      await connection.queryObject`
-        UPDATE auth.users
-        SET email_confirmed_at = COALESCE(email_confirmed_at, now()),
-            confirmed_at = COALESCE(confirmed_at, now())
-        WHERE email = ${email}
-      `
-    } finally {
-      connection.release()
-    }
-  } finally {
-    await adminPool.end()
-  }
-  return { email, password }
-}
-
-async function signInAs(email: string, password: string) {
-  const {
-    data: { session },
-    error,
-  } = await supabase.auth.signInWithPassword({ email, password })
-  if (error || !session) {
-    throw new Error(`sign-in failed for ${email}: ${error?.message ?? 'no session'}`)
-  }
-  return session
-}
-
-async function countFolderAuditRows(action: string, folderId: string): Promise<number> {
+async function countFolderAuditRows(
+  action: string,
+  folderId: string,
+): Promise<number> {
   const adminPool = new Pool(superuserDbUrl, 1, true)
   try {
     const conn = await adminPool.connect()
@@ -215,11 +179,15 @@ Deno.test(
     const res = await fetch(contentUrl('nonexistent00000000'), {
       method: 'POST',
       headers: authHeaders(session.access_token),
-      body: JSON.stringify({ type: 'sql', name: 'x', content: { sql: 'select 1' } }),
+      body: JSON.stringify({
+        type: 'sql',
+        name: 'x',
+        content: { sql: 'select 1' },
+      }),
     })
     assertEquals(res.status, 404)
     await res.body?.cancel()
-  }
+  },
 )
 
 // ── Create + list + count ────────────────────────────────
@@ -423,7 +391,7 @@ Deno.test("PATCH /content/item/{id} on another user's private item returns 403",
   const created = await createRes.json()
   const itemId = created.id as string
 
-  const { email, password } = await signUpDisposableUser()
+  const { email, password } = await createDisposableUser('content-other')
   await addAsOrgMember(testOrgSlug, email)
   const otherSession = await signInAs(email, password)
 
@@ -440,7 +408,7 @@ Deno.test("PATCH /content/item/{id} on another user's private item returns 403",
   })
   assert(
     getRes.status === 403 || getRes.status === 404,
-    `expected 403/404 when reading another user's private item (got ${getRes.status})`
+    `expected 403/404 when reading another user's private item (got ${getRes.status})`,
   )
   await getRes.body?.cancel()
 
@@ -530,8 +498,14 @@ Deno.test('GET /content/folders lists root folders + root-level contents', async
   assert(Array.isArray(body.data.contents))
 
   const folderIds = new Set(body.data.folders.map((f: { id: string }) => f.id))
-  assert(folderIds.has(createdFolderId), 'root listing should include created root folder')
-  assert(!folderIds.has(childFolderId), 'child folder should not appear at root')
+  assert(
+    folderIds.has(createdFolderId),
+    'root listing should include created root folder',
+  )
+  assert(
+    !folderIds.has(childFolderId),
+    'child folder should not appear at root',
+  )
 })
 
 Deno.test('GET /content/folders/{id} lists folder contents', async () => {
@@ -547,15 +521,24 @@ Deno.test('GET /content/folders/{id} lists folder contents', async () => {
   assert(Array.isArray(body.data.folders))
   assert(Array.isArray(body.data.contents))
   const itemIds = new Set(body.data.contents.map((c: { id: string }) => c.id))
-  assert(itemIds.has(folderItemId), 'folder contents should include the item created inside it')
+  assert(
+    itemIds.has(folderItemId),
+    'folder contents should include the item created inside it',
+  )
   const nestedIds = new Set(body.data.folders.map((f: { id: string }) => f.id))
-  assert(nestedIds.has(childFolderId), "subfolder should appear in parent's listing")
+  assert(
+    nestedIds.has(childFolderId),
+    "subfolder should appear in parent's listing",
+  )
 })
 
 Deno.test('PATCH /content/folders/{id} renames the folder', async () => {
   if (!testRef || !createdFolderId) return
   const session = await getTestSession()
-  const before = await countFolderAuditRows('project.content_folder_updated', createdFolderId)
+  const before = await countFolderAuditRows(
+    'project.content_folder_updated',
+    createdFolderId,
+  )
 
   const res = await fetch(contentUrl(testRef, `/folders/${createdFolderId}`), {
     method: 'PATCH',
@@ -567,19 +550,29 @@ Deno.test('PATCH /content/folders/{id} renames the folder', async () => {
   assertEquals(body.id, createdFolderId)
   assertEquals(body.name, 'My Folder (Renamed)')
 
-  const after = await countFolderAuditRows('project.content_folder_updated', createdFolderId)
-  assertEquals(after - before, 1, 'PATCH must emit one project.content_folder_updated audit row')
+  const after = await countFolderAuditRows(
+    'project.content_folder_updated',
+    createdFolderId,
+  )
+  assertEquals(
+    after - before,
+    1,
+    'PATCH must emit one project.content_folder_updated audit row',
+  )
 })
 
 Deno.test('PATCH /content/folders/{unknownId} returns 404', async () => {
   if (!testRef) return
   const session = await getTestSession()
 
-  const res = await fetch(contentUrl(testRef, `/folders/${crypto.randomUUID()}`), {
-    method: 'PATCH',
-    headers: authHeaders(session.access_token),
-    body: JSON.stringify({ name: 'x' }),
-  })
+  const res = await fetch(
+    contentUrl(testRef, `/folders/${crypto.randomUUID()}`),
+    {
+      method: 'PATCH',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({ name: 'x' }),
+    },
+  )
   assertEquals(res.status, 404)
   await res.body?.cancel()
 })
@@ -602,9 +595,12 @@ Deno.test(
     assertEquals(body.deleted, 1)
 
     // Child folder should also be gone (FK ON DELETE CASCADE).
-    const childRes = await fetch(contentUrl(testRef, `/folders/${childFolderId}`), {
-      headers: authHeaders(session.access_token),
-    })
+    const childRes = await fetch(
+      contentUrl(testRef, `/folders/${childFolderId}`),
+      {
+        headers: authHeaders(session.access_token),
+      },
+    )
     assertEquals(childRes.status, 404)
     await childRes.body?.cancel()
 
@@ -615,7 +611,7 @@ Deno.test(
     assertEquals(itemRes.status, 200)
     const item = await itemRes.json()
     assertEquals(item.folder_id, null)
-  }
+  },
 )
 
 // ── Content: bulk DELETE ────────────────────────────────
@@ -644,7 +640,7 @@ Deno.test(
       assertEquals(itemRes.status, 404)
       await itemRes.body?.cancel()
     }
-  }
+  },
 )
 
 Deno.test('DELETE /content with empty ids returns { deleted: 0 }', async () => {

@@ -1,18 +1,21 @@
-import { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
 import { assert, assertEquals, assertExists, assertNotEquals } from 'jsr:@std/assert@1'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 import 'jsr:@std/dotenv/load'
 
+import { createDisposableUser, signInAs } from './_helpers/test-user.ts'
+
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!
-const superuserDbUrl = Deno.env.get('SUPERUSER_DB_URL')!
 const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
 })
 
 const ORG_URL = `${supabaseUrl}/api/platform/organizations`
-const SIGNUP_URL = `${supabaseUrl}/api/platform/signup`
 
 async function getTestSession() {
   const {
@@ -23,7 +26,9 @@ async function getTestSession() {
     password: 'test-password',
   })
   if (error || !session) {
-    throw new Error(`Failed to sign in test user: ${error?.message ?? 'no session'}`)
+    throw new Error(
+      `Failed to sign in test user: ${error?.message ?? 'no session'}`,
+    )
   }
   return session
 }
@@ -33,52 +38,6 @@ function authHeaders(token: string): Record<string, string> {
     Authorization: `Bearer ${token}`,
     'Content-Type': 'application/json',
   }
-}
-
-async function signUpDisposableUser(): Promise<{ email: string; password: string }> {
-  const email = `orgs-other-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`
-  const password = 'Test1234!'
-  const res = await fetch(SIGNUP_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email,
-      password,
-      hcaptchaToken: null,
-      redirectTo: 'http://localhost:8000',
-    }),
-  })
-  await res.body?.cancel()
-  assert(res.status === 201 || res.status === 200, `signup failed: ${res.status}`)
-
-  const adminPool = new Pool(superuserDbUrl, 1, true)
-  try {
-    const connection = await adminPool.connect()
-    try {
-      await connection.queryObject`
-        UPDATE auth.users
-        SET email_confirmed_at = COALESCE(email_confirmed_at, now()),
-            confirmed_at = COALESCE(confirmed_at, now())
-        WHERE email = ${email}
-      `
-    } finally {
-      connection.release()
-    }
-  } finally {
-    await adminPool.end()
-  }
-  return { email, password }
-}
-
-async function signInAs(email: string, password: string) {
-  const {
-    data: { session },
-    error,
-  } = await supabase.auth.signInWithPassword({ email, password })
-  if (error || !session) {
-    throw new Error(`sign-in failed for ${email}: ${error?.message ?? 'no session'}`)
-  }
-  return session
 }
 
 // ── Auth ─────────────────────────────────────────────────
@@ -110,7 +69,11 @@ Deno.test('POST /organizations creates org and returns OrganizationResponse shap
   const res = await fetch(ORG_URL, {
     method: 'POST',
     headers: authHeaders(session.access_token),
-    body: JSON.stringify({ name: orgName, kind: 'PERSONAL', tier: 'tier_free' }),
+    body: JSON.stringify({
+      name: orgName,
+      kind: 'PERSONAL',
+      tier: 'tier_free',
+    }),
   })
   assertEquals(res.status, 201)
 
@@ -301,9 +264,12 @@ Deno.test('GET /permissions includes slug of newly created org', async () => {
   const createdOrg = await createRes.json()
   const slug = createdOrg.slug
 
-  const permRes = await fetch(`${supabaseUrl}/api/platform/profile/permissions`, {
-    headers: authHeaders(session.access_token),
-  })
+  const permRes = await fetch(
+    `${supabaseUrl}/api/platform/profile/permissions`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(permRes.status, 200)
   const permissions = await permRes.json()
   assert(Array.isArray(permissions))
@@ -345,13 +311,22 @@ const SUBRESOURCE_MUTATIONS: Array<{
   path: string
   body?: Record<string, unknown>
 }> = [
-  { name: 'PATCH /apps/{app_id}', method: 'PATCH', path: '/apps/app-123', body: { name: 'x' } },
+  {
+    name: 'PATCH /apps/{app_id}',
+    method: 'PATCH',
+    path: '/apps/app-123',
+    body: { name: 'x' },
+  },
   { name: 'DELETE /apps/{app_id}', method: 'DELETE', path: '/apps/app-123' },
   {
     name: 'PUT /oauth/apps/{id}',
     method: 'PUT',
     path: '/oauth/apps/oauth-123',
-    body: { name: 'x', website: 'https://x.test', redirect_uris: ['https://x.test'] },
+    body: {
+      name: 'x',
+      website: 'https://x.test',
+      redirect_uris: ['https://x.test'],
+    },
   },
   {
     name: 'DELETE /oauth/apps/{id}/client-secrets/{secret_id}',
@@ -391,7 +366,7 @@ for (const tc of SUBRESOURCE_MUTATIONS) {
       assertNotEquals(res.status, 405)
       assert(
         res.status === 200 || res.status === 501,
-        `${tc.name}: expected 200 or 501, got ${res.status}`
+        `${tc.name}: expected 200 or 501, got ${res.status}`,
       )
       await res.body?.cancel()
     } finally {
@@ -426,7 +401,7 @@ Deno.test(
     const body = await res.json()
     assertEquals(body.installed, false)
     assertEquals(body.reason, 'self_hosted')
-  }
+  },
 )
 
 Deno.test('POST /organizations/cloud-marketplace returns 401 without auth', async () => {
@@ -459,7 +434,7 @@ Deno.test(
     assertEquals(body.tax, null)
     assertEquals(body.tax_status, 'not_applicable')
     assertEquals(body.total, 0)
-  }
+  },
 )
 
 Deno.test('POST /organizations/preview-creation without name returns null slug', async () => {
@@ -487,7 +462,11 @@ Deno.test('POST /organizations/preview-creation returns 401 without auth', async
 
 // ── Bundle G — Compliance Documents ────────────────────────────────────
 
-const DOC_TYPES = ['standard-security-questionnaire', 'soc2-type-2-report', 'iso27001-certificate']
+const DOC_TYPES = [
+  'standard-security-questionnaire',
+  'soc2-type-2-report',
+  'iso27001-certificate',
+]
 
 for (const docType of DOC_TYPES) {
   Deno.test(
@@ -507,7 +486,7 @@ for (const docType of DOC_TYPES) {
       } finally {
         await cleanupOrg(session.access_token, slug)
       }
-    }
+    },
   )
 }
 
@@ -517,11 +496,11 @@ Deno.test(
     const session = await getTestSession()
     const res = await fetch(
       `${ORG_URL}/nonexistent-org-bundle-g/documents/standard-security-questionnaire`,
-      { headers: authHeaders(session.access_token) }
+      { headers: authHeaders(session.access_token) },
     )
     assertEquals(res.status, 404)
     await res.body?.cancel()
-  }
+  },
 )
 
 Deno.test(
@@ -541,7 +520,7 @@ Deno.test(
     } finally {
       await cleanupOrg(session.access_token, slug)
     }
-  }
+  },
 )
 
 Deno.test('POST /organizations/{slug}/documents/dpa returns 401 without auth', async () => {
@@ -565,14 +544,17 @@ Deno.test('non-member: PATCH /organizations/{slug} is denied', async () => {
   const orgRes = await fetch(ORG_URL, {
     method: 'POST',
     headers: authHeaders(session.access_token),
-    body: JSON.stringify({ name: `OtherOrg NonMember ${Date.now()}`, tier: 'tier_free' }),
+    body: JSON.stringify({
+      name: `OtherOrg NonMember ${Date.now()}`,
+      tier: 'tier_free',
+    }),
   })
   assertEquals(orgRes.status, 201)
   const org = await orgRes.json()
   const orgSlug = org.slug
 
   try {
-    const { email, password } = await signUpDisposableUser()
+    const { email, password } = await createDisposableUser('orgs-other')
     const otherSession = await signInAs(email, password)
 
     const res = await fetch(`${ORG_URL}/${orgSlug}`, {
@@ -582,7 +564,7 @@ Deno.test('non-member: PATCH /organizations/{slug} is denied', async () => {
     })
     assert(
       res.status === 404 || res.status === 403,
-      `non-member should be denied (got ${res.status})`
+      `non-member should be denied (got ${res.status})`,
     )
     await res.body?.cancel()
 
@@ -605,14 +587,17 @@ Deno.test('non-member: DELETE /organizations/{slug} is denied', async () => {
   const orgRes = await fetch(ORG_URL, {
     method: 'POST',
     headers: authHeaders(session.access_token),
-    body: JSON.stringify({ name: `OtherOrg Delete ${Date.now()}`, tier: 'tier_free' }),
+    body: JSON.stringify({
+      name: `OtherOrg Delete ${Date.now()}`,
+      tier: 'tier_free',
+    }),
   })
   assertEquals(orgRes.status, 201)
   const org = await orgRes.json()
   const orgSlug = org.slug
 
   try {
-    const { email, password } = await signUpDisposableUser()
+    const { email, password } = await createDisposableUser('orgs-other')
     const otherSession = await signInAs(email, password)
 
     const res = await fetch(`${ORG_URL}/${orgSlug}`, {
@@ -621,14 +606,18 @@ Deno.test('non-member: DELETE /organizations/{slug} is denied', async () => {
     })
     assert(
       res.status === 404 || res.status === 403,
-      `non-member should be denied (got ${res.status})`
+      `non-member should be denied (got ${res.status})`,
     )
     await res.body?.cancel()
 
     const verifyRes = await fetch(`${ORG_URL}/${orgSlug}`, {
       headers: authHeaders(session.access_token),
     })
-    assertEquals(verifyRes.status, 200, 'owner org must survive cross-user DELETE')
+    assertEquals(
+      verifyRes.status,
+      200,
+      'owner org must survive cross-user DELETE',
+    )
   } finally {
     await fetch(`${ORG_URL}/${orgSlug}`, {
       method: 'DELETE',
@@ -642,14 +631,17 @@ Deno.test('non-member: POST /organizations/{slug}/documents/dpa is denied', asyn
   const orgRes = await fetch(ORG_URL, {
     method: 'POST',
     headers: authHeaders(session.access_token),
-    body: JSON.stringify({ name: `OtherOrg DPA ${Date.now()}`, tier: 'tier_free' }),
+    body: JSON.stringify({
+      name: `OtherOrg DPA ${Date.now()}`,
+      tier: 'tier_free',
+    }),
   })
   assertEquals(orgRes.status, 201)
   const org = await orgRes.json()
   const orgSlug = org.slug
 
   try {
-    const { email, password } = await signUpDisposableUser()
+    const { email, password } = await createDisposableUser('orgs-other')
     const otherSession = await signInAs(email, password)
 
     const res = await fetch(`${ORG_URL}/${orgSlug}/documents/dpa`, {
@@ -659,7 +651,7 @@ Deno.test('non-member: POST /organizations/{slug}/documents/dpa is denied', asyn
     })
     assert(
       res.status === 404 || res.status === 403,
-      `non-member should be denied (got ${res.status})`
+      `non-member should be denied (got ${res.status})`,
     )
     await res.body?.cancel()
   } finally {

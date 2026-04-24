@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import {
@@ -35,7 +35,7 @@ export async function handleMembers(
   orgId: number,
   profileId: number,
   gotrueId: string,
-  email: string
+  email: string,
 ): Promise<Response> {
   const ip = getClientIp(req)
   const auditCtx = { email, ip, method, route: '/organizations/*/members' + subPath }
@@ -80,7 +80,7 @@ export async function handleMembers(
       body.enforced,
       profileId,
       gotrueId,
-      auditCtx
+      auditCtx,
     )
     return Response.json(mfa, { headers: corsHeaders })
   }
@@ -101,14 +101,14 @@ export async function handleMembers(
     if (!body.email || !body.role_id) {
       return Response.json(
         { message: 'email and role_id are required' },
-        { status: 400, headers: corsHeaders }
+        { status: 400, headers: corsHeaders },
       )
     }
     const result = await createInvitation(pool, orgId, body, profileId, gotrueId, auditCtx)
     if (result.error) {
       return Response.json(
         { message: result.error },
-        { status: result.status ?? 400, headers: corsHeaders }
+        { status: result.status ?? 400, headers: corsHeaders },
       )
     }
     return Response.json(result.invitation, { status: 201, headers: corsHeaders })
@@ -130,7 +130,7 @@ export async function handleMembers(
     if (!result.success) {
       return Response.json(
         { message: result.error },
-        { status: result.status ?? 400, headers: corsHeaders }
+        { status: result.status ?? 400, headers: corsHeaders },
       )
     }
     return Response.json({ message: 'Invitation accepted' }, { headers: corsHeaders })
@@ -148,7 +148,7 @@ export async function handleMembers(
     if (!deleted) {
       return Response.json(
         { message: 'Invitation not found' },
-        { status: 404, headers: corsHeaders }
+        { status: 404, headers: corsHeaders },
       )
     }
     return Response.json({ message: 'Invitation deleted' }, { headers: corsHeaders })
@@ -174,12 +174,12 @@ export async function handleMembers(
         body.role_scoped_projects ?? [],
         profileId,
         gotrueId,
-        auditCtx
+        auditCtx,
       )
       if (!result.success) {
         return Response.json(
           { message: result.error },
-          { status: result.status ?? 400, headers: corsHeaders }
+          { status: result.status ?? 400, headers: corsHeaders },
         )
       }
       return Response.json({ message: 'Role updated' }, { headers: corsHeaders })
@@ -197,12 +197,12 @@ export async function handleMembers(
         roleId,
         profileId,
         gotrueId,
-        auditCtx
+        auditCtx,
       )
       if (!result.success) {
         return Response.json(
           { message: result.error },
-          { status: result.status ?? 400, headers: corsHeaders }
+          { status: result.status ?? 400, headers: corsHeaders },
         )
       }
       return Response.json({ message: 'Role unassigned' }, { headers: corsHeaders })
@@ -221,7 +221,7 @@ export async function handleMembers(
     if (!result.success) {
       return Response.json(
         { message: result.error },
-        { status: result.status ?? 400, headers: corsHeaders }
+        { status: result.status ?? 400, headers: corsHeaders },
       )
     }
     return Response.json({ message: 'Member removed' }, { headers: corsHeaders })
@@ -239,7 +239,7 @@ export async function handleMembers(
     if (!body.role_id) {
       return Response.json(
         { message: 'role_id is required' },
-        { status: 400, headers: corsHeaders }
+        { status: 400, headers: corsHeaders },
       )
     }
     const result = await assignMemberRole(
@@ -250,12 +250,12 @@ export async function handleMembers(
       body.role_scoped_projects,
       profileId,
       gotrueId,
-      auditCtx
+      auditCtx,
     )
     if (!result.success) {
       return Response.json(
         { message: result.error },
-        { status: result.status ?? 400, headers: corsHeaders }
+        { status: result.status ?? 400, headers: corsHeaders },
       )
     }
     return Response.json({ message: 'Role assigned' }, { headers: corsHeaders })

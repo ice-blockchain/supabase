@@ -1,22 +1,27 @@
-import { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 import { assert, assertEquals, assertExists } from 'jsr:@std/assert@1'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 import 'jsr:@std/dotenv/load'
+
+import { createDisposableUser, signInAs } from './_helpers/test-user.ts'
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!
 const superuserDbUrl = Deno.env.get('SUPERUSER_DB_URL')!
 
 const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
 })
 
 const V1_PROJECTS_URL = `${supabaseUrl}/api/v1/projects`
 const V1_BRANCHES_URL = `${supabaseUrl}/api/v1/branches`
 const PROJECTS_URL = `${supabaseUrl}/api/platform/projects`
 const ORG_URL = `${supabaseUrl}/api/platform/organizations`
-const SIGNUP_URL = `${supabaseUrl}/api/platform/signup`
 
 async function getTestSession() {
   const {
@@ -27,7 +32,9 @@ async function getTestSession() {
     password: 'test-password',
   })
   if (error || !session) {
-    throw new Error(`Failed to sign in test user: ${error?.message ?? 'no session'}`)
+    throw new Error(
+      `Failed to sign in test user: ${error?.message ?? 'no session'}`,
+    )
   }
   return session
 }
@@ -39,60 +46,10 @@ function authHeaders(token: string): Record<string, string> {
   }
 }
 
-// Signup + force-confirm a disposable user used only for cross-project
-// "non-member" assertions. Mirrors the pattern in project-api-keys-test.ts.
-async function signUpDisposableUser(): Promise<{ email: string; password: string }> {
-  const email = `branches-other-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`
-  const password = 'Test1234!'
-
-  const res = await fetch(SIGNUP_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email,
-      password,
-      hcaptchaToken: null,
-      redirectTo: 'http://localhost:8000',
-    }),
-  })
-  await res.body?.cancel()
-  assert(res.status === 201 || res.status === 200, `signup failed: ${res.status}`)
-
-  const adminPool = new Pool(superuserDbUrl, 1, true)
-  try {
-    const connection = await adminPool.connect()
-    try {
-      await connection.queryObject`
-        UPDATE auth.users
-        SET email_confirmed_at = COALESCE(email_confirmed_at, now()),
-            confirmed_at = COALESCE(confirmed_at, now())
-        WHERE email = ${email}
-      `
-    } finally {
-      connection.release()
-    }
-  } finally {
-    await adminPool.end()
-  }
-
-  return { email, password }
-}
-
-async function signIn(email: string, password: string) {
-  const {
-    data: { session },
-    error,
-  } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  })
-  if (error || !session) {
-    throw new Error(`sign-in failed for ${email}: ${error?.message ?? 'no session'}`)
-  }
-  return session
-}
-
-async function countBranchAuditRows(action: string, branchId: string): Promise<number> {
+async function countBranchAuditRows(
+  action: string,
+  branchId: string,
+): Promise<number> {
   const adminPool = new Pool(superuserDbUrl, 1, true)
   try {
     const conn = await adminPool.connect()
@@ -130,15 +87,20 @@ Deno.test('POST /v1/projects/{ref}/branches returns 401 without auth', async () 
 })
 
 Deno.test('GET /v1/branches/{id} returns 401 without auth', async () => {
-  const res = await fetch(`${V1_BRANCHES_URL}/00000000-0000-0000-0000-000000000000`)
+  const res = await fetch(
+    `${V1_BRANCHES_URL}/00000000-0000-0000-0000-000000000000`,
+  )
   assertEquals(res.status, 401)
   await res.body?.cancel()
 })
 
 Deno.test('POST /v1/branches/{id}/push returns 401 without auth', async () => {
-  const res = await fetch(`${V1_BRANCHES_URL}/00000000-0000-0000-0000-000000000000/push`, {
-    method: 'POST',
-  })
+  const res = await fetch(
+    `${V1_BRANCHES_URL}/00000000-0000-0000-0000-000000000000/push`,
+    {
+      method: 'POST',
+    },
+  )
   assertEquals(res.status, 401)
   await res.body?.cancel()
 })
@@ -284,9 +246,12 @@ Deno.test('GET /v1/branches/{id} returns the branch', async () => {
 
 Deno.test('GET /v1/branches/{unknown-uuid} returns 404', async () => {
   const session = await getTestSession()
-  const res = await fetch(`${V1_BRANCHES_URL}/11111111-1111-1111-1111-111111111111`, {
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${V1_BRANCHES_URL}/11111111-1111-1111-1111-111111111111`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 404)
   await res.body?.cancel()
 })
@@ -303,7 +268,10 @@ Deno.test('GET /v1/branches/not-a-uuid returns 404', async () => {
 Deno.test('PATCH /v1/branches/{id} updates git_branch', async () => {
   if (!createdBranchId) return
   const session = await getTestSession()
-  const before = await countBranchAuditRows('project.branch_updated', createdBranchId)
+  const before = await countBranchAuditRows(
+    'project.branch_updated',
+    createdBranchId,
+  )
 
   const res = await fetch(`${V1_BRANCHES_URL}/${createdBranchId}`, {
     method: 'PATCH',
@@ -314,8 +282,15 @@ Deno.test('PATCH /v1/branches/{id} updates git_branch', async () => {
   const body = await res.json()
   assertEquals(body.git_branch, 'develop')
 
-  const after = await countBranchAuditRows('project.branch_updated', createdBranchId)
-  assertEquals(after - before, 1, 'PATCH must emit one project.branch_updated audit row')
+  const after = await countBranchAuditRows(
+    'project.branch_updated',
+    createdBranchId,
+  )
+  assertEquals(
+    after - before,
+    1,
+    'PATCH must emit one project.branch_updated audit row',
+  )
   assertEquals(body.pr_number, 42)
   assertEquals(body.branch_name, createdBranchName)
 })
@@ -344,7 +319,7 @@ Deno.test(
     assertEquals(body.schema_changes.length, 0)
     assert(Array.isArray(body.data_changes))
     assertEquals(body.data_changes.length, 0)
-  }
+  },
 )
 
 // ── State transitions ────────────────────────────────────
@@ -436,7 +411,11 @@ Deno.test('GET /v1/projects/{ref}/branches excludes soft-deleted branches', asyn
   assertEquals(res.status, 200)
   const body = await res.json()
   const found = body.find((b: { id: string }) => b.id === createdBranchId)
-  assertEquals(found, undefined, 'Soft-deleted branch should not appear in list')
+  assertEquals(
+    found,
+    undefined,
+    'Soft-deleted branch should not appear in list',
+  )
 })
 
 Deno.test('PATCH /v1/branches/{id} on deleted branch returns 404', async () => {
@@ -454,7 +433,10 @@ Deno.test('PATCH /v1/branches/{id} on deleted branch returns 404', async () => {
 Deno.test('POST /v1/branches/{id}/restore un-soft-deletes the branch', async () => {
   if (!createdBranchId) return
   const session = await getTestSession()
-  const before = await countBranchAuditRows('project.branch_restored', createdBranchId)
+  const before = await countBranchAuditRows(
+    'project.branch_restored',
+    createdBranchId,
+  )
 
   const res = await fetch(`${V1_BRANCHES_URL}/${createdBranchId}/restore`, {
     method: 'POST',
@@ -464,8 +446,15 @@ Deno.test('POST /v1/branches/{id}/restore un-soft-deletes the branch', async () 
   const body = await res.json()
   assertEquals(body.deleted_at, null)
 
-  const after = await countBranchAuditRows('project.branch_restored', createdBranchId)
-  assertEquals(after - before, 1, 'restore must emit one project.branch_restored audit row')
+  const after = await countBranchAuditRows(
+    'project.branch_restored',
+    createdBranchId,
+  )
+  assertEquals(
+    after - before,
+    1,
+    'restore must emit one project.branch_restored audit row',
+  )
 })
 
 Deno.test('POST /v1/branches/{id}/restore on non-deleted branch returns 409', async () => {
@@ -487,8 +476,8 @@ Deno.test('POST /v1/branches/{id}/restore on non-deleted branch returns 409', as
 
 Deno.test('GET /v1/projects/{ref}/branches from non-member user is denied', async () => {
   if (!testRef) return
-  const { email, password } = await signUpDisposableUser()
-  const otherSession = await signIn(email, password)
+  const { email, password } = await createDisposableUser('branches-other')
+  const otherSession = await signInAs(email, password)
 
   const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/branches`, {
     headers: authHeaders(otherSession.access_token),
@@ -497,15 +486,15 @@ Deno.test('GET /v1/projects/{ref}/branches from non-member user is denied', asyn
   // is indistinguishable from an unknown ref (404) at the project level.
   assert(
     res.status === 404 || res.status === 403,
-    `non-member should be denied (got ${res.status})`
+    `non-member should be denied (got ${res.status})`,
   )
   await res.body?.cancel()
 })
 
 Deno.test('GET /v1/branches/{id} from non-member user returns 403', async () => {
   if (!createdBranchId) return
-  const { email, password } = await signUpDisposableUser()
-  const otherSession = await signIn(email, password)
+  const { email, password } = await createDisposableUser('branches-other')
+  const otherSession = await signInAs(email, password)
 
   const res = await fetch(`${V1_BRANCHES_URL}/${createdBranchId}`, {
     headers: authHeaders(otherSession.access_token),
@@ -517,8 +506,8 @@ Deno.test('GET /v1/branches/{id} from non-member user returns 403', async () => 
 
 Deno.test('POST /v1/branches/{id}/push from non-member user returns 403', async () => {
   if (!createdBranchId) return
-  const { email, password } = await signUpDisposableUser()
-  const otherSession = await signIn(email, password)
+  const { email, password } = await createDisposableUser('branches-other')
+  const otherSession = await signInAs(email, password)
 
   const res = await fetch(`${V1_BRANCHES_URL}/${createdBranchId}/push`, {
     method: 'POST',

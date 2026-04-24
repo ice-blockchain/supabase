@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import {
@@ -10,8 +10,40 @@ import {
   updateLogDrain,
 } from '../services/log-drains.service.ts'
 import { queryEndpoint } from '../services/logflare.client.ts'
+import {
+  fetchProjectJson,
+  getProjectBackend,
+  type ProjectBackend,
+  ProjectBackendNotProvisionedError,
+} from '../services/project-backend.service.ts'
 import { getProjectByRef } from '../services/project.service.ts'
+import { MAX_BODY_ANALYTICS, readBodyWithLimit } from '../utils/body-limits.ts'
 import { getClientIp } from '../utils/client-ip.ts'
+import { notProvisionedResponse } from '../utils/project-backend-response.ts'
+import { assertValidRef } from '../utils/ref-validation.ts'
+
+// M11: small wrapper so every POST/PATCH handler below can share a single
+// body-size limit and failure path. Returns either parsed JSON, `undefined`
+// (empty / malformed body — matches the old `.catch(() => undefined)`
+// semantics used throughout this module), OR a pre-built 413 Response when
+// the caller exceeds `MAX_BODY_ANALYTICS`. Call-sites branch on
+// `instanceof Response` and `return` immediately on 413 to avoid auditing
+// or calling upstream.
+async function readAnalyticsBody(req: Request): Promise<unknown | Response> {
+  let text: string
+  try {
+    text = await readBodyWithLimit(req, MAX_BODY_ANALYTICS)
+  } catch (tooLarge) {
+    if (tooLarge instanceof Response) return tooLarge
+    return undefined
+  }
+  if (!text) return undefined
+  try {
+    return JSON.parse(text)
+  } catch {
+    return undefined
+  }
+}
 
 // ── Response helpers ──────────────────────────────────────
 
@@ -124,8 +156,9 @@ function buildInfraMonitoringResponse(): {
 
 async function handleAnalyticsEndpoint(
   req: Request,
+  backend: ProjectBackend,
   endpointName: string,
-  method: string
+  method: string,
 ): Promise<Response> {
   const url = new URL(req.url)
   const params: Record<string, string | undefined> = {}
@@ -135,7 +168,9 @@ async function handleAnalyticsEndpoint(
 
   let body: unknown
   if (method === 'POST') {
-    body = await req.json().catch(() => undefined)
+    const parsed = await readAnalyticsBody(req)
+    if (parsed instanceof Response) return parsed
+    body = parsed
     if (body && typeof body === 'object') {
       for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
         if (typeof value === 'string' && value.length > 0 && params[key] === undefined) {
@@ -146,10 +181,11 @@ async function handleAnalyticsEndpoint(
   }
 
   const { result } = await queryEndpoint(
+    backend,
     endpointName,
     params,
     body,
-    method === 'POST' ? 'POST' : 'GET'
+    method === 'POST' ? 'POST' : 'GET',
   )
   return jsonResponse({ result }, 200)
 }
@@ -158,19 +194,28 @@ async function handleAnalyticsEndpoint(
 
 const EMPTY_OPENAPI_SPEC = { openapi: '3.0.0', info: {}, paths: {} }
 
-async function handleRestSpec(): Promise<Response> {
-  const base = Deno.env.get('SUPABASE_URL') ?? ''
-  const serviceKey =
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_SERVICE_KEY') ?? ''
+async function handleRestSpec(backend: ProjectBackend): Promise<Response> {
+  if (!backend.endpoint) return jsonResponse(EMPTY_OPENAPI_SPEC, 200)
 
-  if (!base) return jsonResponse(EMPTY_OPENAPI_SPEC, 200)
+  // M8: PostgREST's `/rest/v1/` OpenAPI document enumerates every
+  // table, view, and RPC the JWT's role can see. `fetchProjectJson` by
+  // default signs with `backend.serviceKey`, which would leak
+  // service_role-only schemas into Studio's "Docs" tab. The docs tab
+  // targets developers who are writing client-side code against the
+  // anon key, so the spec should reflect the anon role's view of the
+  // API — i.e. only the public schema + RLS-visible columns. We pin
+  // Authorization + apikey to `backend.anonKey` explicitly (and fall
+  // back to an empty spec if the resolver never populated an anon key,
+  // e.g. per-project mode where anon_key is NULL).
+  if (!backend.anonKey) return jsonResponse(EMPTY_OPENAPI_SPEC, 200)
 
   try {
-    const res = await fetch(`${base}/rest/v1/`, {
+    const res = await fetchProjectJson(backend, '/rest/v1/', {
       method: 'GET',
       headers: {
-        apikey: serviceKey,
         Accept: 'application/openapi+json,application/json',
+        Authorization: `Bearer ${backend.anonKey}`,
+        apikey: backend.anonKey,
       },
     })
     if (!res.ok) {
@@ -211,32 +256,34 @@ fragment FullType on __Type {
 fragment InputValue on __InputValue { name description type { ...TypeRef } defaultValue }
 fragment TypeRef on __Type { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name } } } } } } } }`
 
-async function handleGraphqlProxy(req: Request, method: string): Promise<Response> {
-  const base = Deno.env.get('SUPABASE_URL') ?? ''
-  const serviceKey =
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_SERVICE_KEY') ?? ''
-  const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? ''
-
-  if (!base) return jsonResponse(EMPTY_GRAPHQL_RESPONSE, 200)
+async function handleGraphqlProxy(
+  req: Request,
+  backend: ProjectBackend,
+  method: string,
+): Promise<Response> {
+  if (!backend.endpoint) return jsonResponse(EMPTY_GRAPHQL_RESPONSE, 200)
 
   let body: unknown = undefined
   if (method === 'POST') {
-    body = await req.json().catch(() => undefined)
+    const parsed = await readAnalyticsBody(req)
+    if (parsed instanceof Response) return parsed
+    body = parsed
   }
   if (body === undefined || body === null) {
     body = { query: GRAPHQL_INTROSPECTION_QUERY }
   }
 
+  // pg_graphql anon-role introspection: use the anon key when Studio doesn't
+  // forward an x-graphql-authorization header. Studio proxies the admin token
+  // through that header when users run authenticated queries from the GraphiQL
+  // editor.
   const forwardedAuth = req.headers.get('x-graphql-authorization') ?? undefined
+  const authHeader = forwardedAuth ?? `Bearer ${backend.anonKey}`
 
   try {
-    const res = await fetch(`${base}/graphql/v1`, {
+    const res = await fetchProjectJson(backend, '/graphql/v1', {
       method: 'POST',
-      headers: {
-        apikey: serviceKey,
-        Authorization: forwardedAuth ?? `Bearer ${anonKey}`,
-        'Content-Type': 'application/json',
-      },
+      headers: { Authorization: authHeader },
       body: JSON.stringify(body),
     })
     if (!res.ok) {
@@ -260,7 +307,7 @@ async function handleGraphqlProxy(req: Request, method: string): Promise<Respons
 async function handleLogDrainList(
   pool: Pool,
   projectRef: string,
-  profileId: number
+  profileId: number,
 ): Promise<Response> {
   const drains = await listLogDrainResponses(pool, projectRef, profileId)
   return jsonResponse(drains, 200)
@@ -273,22 +320,21 @@ async function handleLogDrainCreate(
   profileId: number,
   gotrueId: string,
   organizationId: number,
-  auditContext: { email: string; ip: string; method: string; route: string }
+  auditContext: { email: string; ip: string; method: string; route: string },
 ): Promise<Response> {
-  let body: Record<string, unknown>
-  try {
-    body = (await req.json()) as Record<string, unknown>
-  } catch {
+  const parsed = await readAnalyticsBody(req)
+  if (parsed instanceof Response) return parsed
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return invalidBodyResponse('Body must be valid JSON')
   }
+  const body = parsed as Record<string, unknown>
 
   const name = typeof body.name === 'string' ? body.name : ''
   const type = typeof body.type === 'string' ? body.type : ''
   const description = typeof body.description === 'string' ? body.description : ''
-  const config =
-    body.config && typeof body.config === 'object' && !Array.isArray(body.config)
-      ? (body.config as Record<string, unknown>)
-      : {}
+  const config = body.config && typeof body.config === 'object' && !Array.isArray(body.config)
+    ? (body.config as Record<string, unknown>)
+    : {}
   const filters = Array.isArray(body.filters) ? (body.filters as unknown[]) : []
 
   if (!name.trim()) return invalidBodyResponse('name is required')
@@ -301,7 +347,7 @@ async function handleLogDrainCreate(
     { name, description, type, config, filters },
     gotrueId,
     organizationId,
-    auditContext
+    auditContext,
   )
   if (outcome.status === 'conflict') {
     return jsonResponse({ code: 'conflict', message: outcome.message }, 409)
@@ -313,7 +359,7 @@ async function handleLogDrainGet(
   pool: Pool,
   projectRef: string,
   token: string,
-  userId: number
+  userId: number,
 ): Promise<Response> {
   const row = await getLogDrain(pool, projectRef, token)
   if (!row) return notFoundResponse('Log drain not found')
@@ -329,14 +375,14 @@ async function handleLogDrainUpdate(
   profileId: number,
   organizationId: number,
   gotrueId: string,
-  auditContext: Parameters<typeof updateLogDrain>[8]
+  auditContext: Parameters<typeof updateLogDrain>[8],
 ): Promise<Response> {
-  let body: Record<string, unknown>
-  try {
-    body = (await req.json()) as Record<string, unknown>
-  } catch {
+  const parsed = await readAnalyticsBody(req)
+  if (parsed instanceof Response) return parsed
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return invalidBodyResponse('Body must be valid JSON')
   }
+  const body = parsed as Record<string, unknown>
 
   const patch: Parameters<typeof updateLogDrain>[3] = {}
   if (typeof body.name === 'string') patch.name = body.name
@@ -359,7 +405,7 @@ async function handleLogDrainUpdate(
     profileId,
     organizationId,
     gotrueId,
-    auditContext
+    auditContext,
   )
   if (outcome.status === 'not_found') return notFoundResponse('Log drain not found')
   if (outcome.status === 'conflict') {
@@ -375,7 +421,7 @@ async function handleLogDrainDelete(
   profileId: number,
   gotrueId: string,
   organizationId: number,
-  auditContext: { email: string; ip: string; method: string; route: string }
+  auditContext: { email: string; ip: string; method: string; route: string },
 ): Promise<Response> {
   const row = await deleteLogDrain(
     pool,
@@ -384,7 +430,7 @@ async function handleLogDrainDelete(
     profileId,
     gotrueId,
     organizationId,
-    auditContext
+    auditContext,
   )
   if (!row) return notFoundResponse('Log drain not found')
   return jsonResponse(toBackendResponse(row, profileId), 200)
@@ -399,13 +445,17 @@ export async function handleProjectAnalytics(
   pool: Pool,
   profileId: number,
   gotrueId: string,
-  email: string
+  email: string,
 ): Promise<Response> {
   const refMatch = path.match(/^\/([^/]+)(\/.*)$/)
   if (!refMatch) return notFoundResponse()
 
   const ref = refMatch[1]
   const subPath = refMatch[2]
+
+  // L4: reject malformed refs before hitting the DB.
+  const bad = assertValidRef(ref)
+  if (bad) return bad
 
   const project = await getProjectByRef(pool, ref, profileId)
   if (!project) return notFoundResponse('Project not found')
@@ -419,9 +469,25 @@ export async function handleProjectAnalytics(
   }
 
   // ── Infra-monitoring ────────────────────────────────────
+  // No backend roundtrip: this is a static shape that Studio uses to populate
+  // the empty charts on self-hosted. Short-circuit BEFORE resolving the
+  // backend so an un-provisioned project doesn't 501 on every dashboard load.
   if (subPath === '/infra-monitoring') {
     if (method === 'GET') return jsonResponse(buildInfraMonitoringResponse(), 200)
     return methodNotAllowedResponse()
+  }
+
+  // Everything below talks to either Logflare, PostgREST, or pg_graphql on
+  // the project's own backend — resolve it once and translate the "not
+  // provisioned" error into a 501 so Studio can render the empty state.
+  let backend: ProjectBackend
+  try {
+    backend = await getProjectBackend(ref, pool)
+  } catch (err) {
+    if (err instanceof ProjectBackendNotProvisionedError) {
+      return notProvisionedResponse(err)
+    }
+    throw err
   }
 
   // ── Analytics endpoints proxy ───────────────────────────
@@ -429,20 +495,20 @@ export async function handleProjectAnalytics(
   if (endpointMatch) {
     const endpointName = endpointMatch[1]
     if (method === 'GET' || method === 'POST') {
-      return handleAnalyticsEndpoint(req, endpointName, method)
+      return handleAnalyticsEndpoint(req, backend, endpointName, method)
     }
     return methodNotAllowedResponse()
   }
 
   // ── REST OpenAPI spec ───────────────────────────────────
   if (subPath === '/api/rest') {
-    if (method === 'GET' || method === 'HEAD') return handleRestSpec()
+    if (method === 'GET' || method === 'HEAD') return handleRestSpec(backend)
     return methodNotAllowedResponse()
   }
 
   // ── GraphQL introspection ───────────────────────────────
   if (subPath === '/api/graphql') {
-    if (method === 'GET' || method === 'POST') return handleGraphqlProxy(req, method)
+    if (method === 'GET' || method === 'POST') return handleGraphqlProxy(req, backend, method)
     return methodNotAllowedResponse()
   }
 
@@ -457,7 +523,7 @@ export async function handleProjectAnalytics(
         profileId,
         gotrueId,
         project.organization_id,
-        auditContext
+        auditContext,
       )
     }
     return methodNotAllowedResponse()
@@ -477,7 +543,7 @@ export async function handleProjectAnalytics(
         profileId,
         project.organization_id,
         gotrueId,
-        auditContext
+        auditContext,
       )
     }
     if (method === 'DELETE') {
@@ -488,7 +554,7 @@ export async function handleProjectAnalytics(
         profileId,
         gotrueId,
         project.organization_id,
-        auditContext
+        auditContext,
       )
     }
     return methodNotAllowedResponse()

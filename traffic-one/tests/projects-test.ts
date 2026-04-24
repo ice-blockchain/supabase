@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertExists, assertNotEquals } from 'jsr:@std/assert@1'
+import { assert, assertEquals, assertExists } from 'jsr:@std/assert@1'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 import 'jsr:@std/dotenv/load'
@@ -6,7 +6,11 @@ import 'jsr:@std/dotenv/load'
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!
 const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
 })
 
 const PROJECTS_URL = `${supabaseUrl}/api/platform/projects`
@@ -21,7 +25,9 @@ async function getTestSession() {
     password: 'test-password',
   })
   if (error || !session) {
-    throw new Error(`Failed to sign in test user: ${error?.message ?? 'no session'}`)
+    throw new Error(
+      `Failed to sign in test user: ${error?.message ?? 'no session'}`,
+    )
   }
   return session
 }
@@ -122,7 +128,10 @@ Deno.test('POST /projects rejects invalid org slug', async () => {
   const res = await fetch(PROJECTS_URL, {
     method: 'POST',
     headers: authHeaders(session.access_token),
-    body: JSON.stringify({ name: 'Test', organization_slug: 'nonexistent-org' }),
+    body: JSON.stringify({
+      name: 'Test',
+      organization_slug: 'nonexistent-org',
+    }),
   })
   assertEquals(res.status, 404)
   await res.body?.cancel()
@@ -247,8 +256,8 @@ Deno.test('POST /projects/{ref}/pause sets status to INACTIVE', async () => {
     headers: authHeaders(session.access_token),
   })
   assertEquals(res.status, 200)
+  await res.body?.cancel()
 
-  // Verify status changed
   const statusRes = await fetch(`${PROJECTS_URL}/${createdRef}/status`, {
     headers: authHeaders(session.access_token),
   })
@@ -264,6 +273,7 @@ Deno.test('POST /projects/{ref}/restore sets status to ACTIVE_HEALTHY', async ()
     headers: authHeaders(session.access_token),
   })
   assertEquals(res.status, 200)
+  await res.body?.cancel()
 
   const statusRes = await fetch(`${PROJECTS_URL}/${createdRef}/status`, {
     headers: authHeaders(session.access_token),
@@ -313,9 +323,12 @@ Deno.test('GET /projects/{ref}/service-versions returns object', async () => {
 
 Deno.test('GET /projects-resource-warnings returns empty array', async () => {
   const session = await getTestSession()
-  const res = await fetch(`${supabaseUrl}/api/platform/projects-resource-warnings`, {
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${supabaseUrl}/api/platform/projects-resource-warnings`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 200)
   const body = await res.json()
   assert(Array.isArray(body))
@@ -367,14 +380,17 @@ Deno.test(
 
     // Invite the reader directly into the source org as read-only. Use the
     // admin API via the owner session.
-    const inviteRes = await fetch(`${ORG_URL}/${testOrgSlug}/members/invitations`, {
-      method: 'POST',
-      headers: authHeaders(ownerSession.access_token),
-      body: JSON.stringify({
-        invited_email: readerEmail,
-        role_id: 2,
-      }),
-    })
+    const inviteRes = await fetch(
+      `${ORG_URL}/${testOrgSlug}/members/invitations`,
+      {
+        method: 'POST',
+        headers: authHeaders(ownerSession.access_token),
+        body: JSON.stringify({
+          invited_email: readerEmail,
+          role_id: 2,
+        }),
+      },
+    )
     if (!inviteRes.ok) {
       // Member-invite API may be gated in this environment; skip the rest.
       await inviteRes.body?.cancel()
@@ -384,23 +400,29 @@ Deno.test(
     if (!invitation?.token) return
 
     // Reader accepts the invitation.
-    await fetch(`${supabaseUrl}/api/platform/organizations/join?token=${invitation.token}`, {
-      method: 'POST',
-      headers: authHeaders(readerSession.access_token),
-    })
+    await fetch(
+      `${supabaseUrl}/api/platform/organizations/join?token=${invitation.token}`,
+      {
+        method: 'POST',
+        headers: authHeaders(readerSession.access_token),
+      },
+    )
 
     // Reader attempts to preview a transfer into an arbitrary org slug: even
     // if the target lookup fails, the source-side role check must fire first
     // and return 403.
-    const previewRes = await fetch(`${PROJECTS_URL}/${createdRef}/transfer/preview`, {
-      method: 'POST',
-      headers: authHeaders(readerSession.access_token),
-      body: JSON.stringify({ target_organization_slug: testOrgSlug }),
-    })
+    const previewRes = await fetch(
+      `${PROJECTS_URL}/${createdRef}/transfer/preview`,
+      {
+        method: 'POST',
+        headers: authHeaders(readerSession.access_token),
+        body: JSON.stringify({ target_organization_slug: testOrgSlug }),
+      },
+    )
     assertEquals(previewRes.status, 403)
     const body = await previewRes.json()
     assertExists(body.message)
-  }
+  },
 )
 
 // ── Delete ───────────────────────────────────────────────

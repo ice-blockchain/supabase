@@ -1,4 +1,6 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
+
+import type { ProjectBackend } from './project-backend.service.ts'
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -76,11 +78,41 @@ function generatePassword(): string {
   return randomHex(32)
 }
 
-function buildConnectionString(username: string, password: string): string {
-  const host = Deno.env.get('POSTGRES_HOST') ?? 'db'
-  const port = Deno.env.get('POSTGRES_PORT') ?? '5432'
-  const dbName = Deno.env.get('POSTGRES_DB') ?? 'postgres'
-  return `postgresql://${username}:${password}@${host}:${port}/${dbName}`
+function buildConnectionString(
+  backend: ProjectBackend,
+  username: string,
+  password: string,
+): string {
+  // Use the externally resolvable host so the DSN we hand back via
+  // `IssueGrantResult.connection_string` is usable from outside the
+  // Docker network (psql, integration tests, future cloud Studio).
+  // In-container DDL pools (`withProjectPool`, `createPostgresRole`)
+  // continue to use `backend.connectionString` / `backend.dbHost`.
+  const host = backend.externalDbHost
+  const port = backend.dbPort
+  const dbName = backend.dbName
+  const encoded = encodeURIComponent(password)
+  return `postgresql://${username}:${encoded}@${host}:${port}/${dbName}`
+}
+
+// One-shot pool helper — every project-DB DDL call opens its own
+// `new Pool(backend.connectionString, 1, true)` and closes it in `finally`
+// so we never leak a connection to a tenant database, even on error. The
+// `lazy=true` flag keeps instantiation cheap when we short-circuit.
+async function withProjectPool<T>(
+  connectionString: string,
+  fn: (pool: Pool) => Promise<T>,
+): Promise<T> {
+  const projectPool = new Pool(connectionString, 1, true)
+  try {
+    return await fn(projectPool)
+  } finally {
+    try {
+      await projectPool.end()
+    } catch (err) {
+      console.warn('JIT project pool close failed:', err)
+    }
+  }
 }
 
 const SAFE_IDENT_RE = /^[a-zA-Z0-9_]+$/
@@ -88,7 +120,7 @@ const SAFE_QUALIFIED_IDENT_RE = /^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)?$/
 
 function mergePolicy(
   current: Partial<JitPolicy> | null | undefined,
-  patch: Partial<JitPolicy>
+  patch: Partial<JitPolicy>,
 ): JitPolicy {
   return { ...DEFAULT_POLICY, ...(current ?? {}), ...patch }
 }
@@ -114,7 +146,7 @@ export async function upsertPolicy(
   patch: Partial<JitPolicy>,
   profileId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<JitPolicy> {
   const connection = await pool.connect()
   try {
@@ -142,7 +174,9 @@ export async function upsertPolicy(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${auditContext.organizationId}, 'project.jit_policy_updated',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'jit_policies (ref: ' + projectRef + ')'},
@@ -194,17 +228,18 @@ export async function listGrants(pool: Pool, projectRef: string): Promise<JitGra
 export async function issueGrant(
   pool: Pool,
   projectRef: string,
+  backend: ProjectBackend,
   input: IssueGrantInput,
   callerProfileId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<IssueGrantResult> {
   const policy = await getPolicy(pool, projectRef)
 
   const requestedDuration = input.duration_minutes ?? policy.max_session_duration_minutes
   const durationMinutes = Math.max(
     1,
-    Math.min(requestedDuration, policy.max_session_duration_minutes)
+    Math.min(requestedDuration, policy.max_session_duration_minutes),
   )
 
   const scope: JitScope = input.scope === 'read-write' ? 'read-write' : policy.default_scope
@@ -217,11 +252,23 @@ export async function issueGrant(
   // transaction — CREATE ROLE runs in its own implicit transaction at the
   // server side and we don't want to entangle its failure mode (e.g. the
   // connection role lacks CREATEROLE) with the accounting insert.
+  //
+  // Role DDL targets the *project* database via a one-shot pool. Without a
+  // provisioned connection string (local mode, unprovisioned tenant) we fall
+  // straight through to the `pending` path so Studio still gets a grant row
+  // it can display + revoke later.
   let status: JitStatus = 'active'
-  try {
-    await createPostgresRole(pool, username, password, scope, input.tables)
-  } catch (err) {
-    console.warn('JIT role creation failed, persisting as pending:', err)
+  if (backend.connectionString) {
+    try {
+      await withProjectPool(
+        backend.connectionString,
+        (projectPool) => createPostgresRole(projectPool, username, password, scope, input.tables),
+      )
+    } catch (err) {
+      console.warn('JIT role creation failed, persisting as pending:', err)
+      status = 'pending'
+    }
+  } else {
     status = 'pending'
   }
 
@@ -256,18 +303,22 @@ export async function issueGrant(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${callerProfileId}, ${auditContext.organizationId}, 'project.jit_grant_issued',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'jit_grants #' + inserted.rows[0].id + ' (ref: ' + projectRef + ')'},
-        ${JSON.stringify({
-          project_ref: projectRef,
-          username,
-          scope,
-          status,
-          target_profile_id: targetProfileId,
-          expires_at: expiresAt,
-        })}::jsonb,
+        ${
+      JSON.stringify({
+        project_ref: projectRef,
+        username,
+        scope,
+        status,
+        target_profile_id: targetProfileId,
+        expires_at: expiresAt,
+      })
+    }::jsonb,
         now()
       )
     `
@@ -278,7 +329,7 @@ export async function issueGrant(
       username,
       password,
       expires_at: expiresAt,
-      connection_string: buildConnectionString(username, password),
+      connection_string: buildConnectionString(backend, username, password),
       status,
     }
   } finally {
@@ -289,10 +340,11 @@ export async function issueGrant(
 export async function revokeGrant(
   pool: Pool,
   projectRef: string,
+  backend: ProjectBackend,
   userId: number,
   callerProfileId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<{ revoked: boolean; count: number }> {
   const toDrop: string[] = []
   let count = 0
@@ -341,16 +393,20 @@ export async function revokeGrant(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${callerProfileId}, ${auditContext.organizationId}, 'project.jit_grant_revoked',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'jit_grants (ref: ' + projectRef + ')'},
-        ${JSON.stringify({
-          project_ref: projectRef,
-          target_user_id: userId,
-          revoked_count: count,
-          usernames: toDrop,
-        })}::jsonb,
+        ${
+      JSON.stringify({
+        project_ref: projectRef,
+        target_user_id: userId,
+        revoked_count: count,
+        usernames: toDrop,
+      })
+    }::jsonb,
         now()
       )
     `
@@ -360,48 +416,89 @@ export async function revokeGrant(
     connection.release()
   }
 
-  // Best-effort DROP ROLE outside the transaction. The grant row is already
-  // flipped to 'revoked', so a failure here just means the PG role stays
-  // around until cleanupExpiredGrants (or a manual sweep) drops it.
-  for (const username of toDrop) {
-    try {
-      await dropPostgresRole(pool, username)
-    } catch (err) {
-      console.warn('JIT role drop failed:', err)
-    }
+  // Best-effort DROP ROLE outside the transaction against the project DB.
+  // The grant row is already flipped to 'revoked', so a failure here just
+  // means the PG role stays around until cleanupExpiredGrants (or a manual
+  // sweep) drops it.
+  if (backend.connectionString) {
+    await withProjectPool(backend.connectionString, async (projectPool) => {
+      for (const username of toDrop) {
+        try {
+          await dropPostgresRole(projectPool, username)
+        } catch (err) {
+          console.warn('JIT role drop failed:', err)
+        }
+      }
+    })
   }
 
   return { revoked: true, count }
 }
 
-export async function cleanupExpiredGrants(pool: Pool): Promise<number> {
-  const toDrop: string[] = []
+/**
+ * Sweep expired grants across all projects. The sweep runs against the
+ * traffic pool (for accounting), then groups expired rows by `project_ref`
+ * and opens one project pool per distinct ref to drop the stale roles.
+ *
+ * Callers pass a `resolveBackend(ref)` closure — typically bound to
+ * `getProjectBackend(ref, pool)` — so this service stays pure and the
+ * backend resolver lives in `project-backend.service.ts`.
+ */
+export async function cleanupExpiredGrants(
+  pool: Pool,
+  resolveBackend: (projectRef: string) => Promise<ProjectBackend | null>,
+): Promise<number> {
+  const expired: Array<{ project_ref: string; username: string }> = []
 
   const connection = await pool.connect()
   try {
-    const result = await connection.queryObject<{ id: number; username: string }>`
+    const result = await connection.queryObject<{
+      id: number
+      project_ref: string
+      username: string
+    }>`
       UPDATE traffic.jit_grants
       SET status = 'expired'
       WHERE status IN ('active', 'pending')
         AND expires_at <= now()
-      RETURNING id, username
+      RETURNING id, project_ref, username
     `
     for (const row of result.rows) {
-      toDrop.push(row.username)
+      expired.push({ project_ref: row.project_ref, username: row.username })
     }
   } finally {
     connection.release()
   }
 
-  for (const username of toDrop) {
-    try {
-      await dropPostgresRole(pool, username)
-    } catch (err) {
-      console.warn('JIT expired role drop failed:', err)
-    }
+  const byRef = new Map<string, string[]>()
+  for (const entry of expired) {
+    const list = byRef.get(entry.project_ref) ?? []
+    list.push(entry.username)
+    byRef.set(entry.project_ref, list)
   }
 
-  return toDrop.length
+  for (const [ref, usernames] of byRef.entries()) {
+    let backend: ProjectBackend | null
+    try {
+      backend = await resolveBackend(ref)
+    } catch (err) {
+      console.warn(`JIT cleanup: could not resolve backend for ${ref}:`, err)
+      continue
+    }
+    if (!backend || !backend.connectionString) continue
+
+    await withProjectPool(backend.connectionString, async (projectPool) => {
+      for (const username of usernames) {
+        try {
+          await dropPostgresRole(projectPool, username)
+        } catch (err) {
+          console.warn('JIT expired role drop failed:', err)
+        }
+      }
+    })
+  }
+
+  return expired.length
 }
 
 // ── Postgres role plumbing ───────────────────────────────────
@@ -411,7 +508,7 @@ async function createPostgresRole(
   username: string,
   password: string,
   scope: JitScope,
-  tables: string[] | undefined
+  tables: string[] | undefined,
 ): Promise<void> {
   if (!SAFE_IDENT_RE.test(username)) {
     throw new Error('invalid username: ' + username)
@@ -460,7 +557,7 @@ async function createPostgresRole(
       }
     } else {
       await connection.queryObject(
-        `GRANT ${grantVerb} ON ALL TABLES IN SCHEMA public TO ${username}`
+        `GRANT ${grantVerb} ON ALL TABLES IN SCHEMA public TO ${username}`,
       )
     }
   } catch (err) {
@@ -484,7 +581,7 @@ async function dropPostgresRole(pool: Pool, username: string): Promise<void> {
   try {
     try {
       await connection.queryObject(
-        `REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${username}`
+        `REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${username}`,
       )
     } catch {
       // Ignore; role may not hold those privileges.

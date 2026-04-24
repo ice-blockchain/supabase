@@ -1,18 +1,25 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import {
   getPolicy,
   issueGrant,
-  listGrants,
-  revokeGrant,
-  upsertPolicy,
   type IssueGrantInput,
   type JitPolicy,
   type JitScope,
+  listGrants,
+  revokeGrant,
+  upsertPolicy,
 } from '../services/jit.service.ts'
+import {
+  getProjectBackend,
+  type ProjectBackend,
+  ProjectBackendNotProvisionedError,
+} from '../services/project-backend.service.ts'
 import { getProjectByRef } from '../services/project.service.ts'
 import { getClientIp } from '../utils/client-ip.ts'
+import { notProvisionedResponse } from '../utils/project-backend-response.ts'
+import { assertValidRef } from '../utils/ref-validation.ts'
 
 // ── Response helpers ─────────────────────────────────────────
 
@@ -81,7 +88,7 @@ export async function handleJit(
   pool: Pool,
   profileId: number,
   gotrueId: string,
-  email: string
+  email: string,
 ): Promise<Response> {
   // Extract ref from path: /{ref}/jit-access, /{ref}/database/jit[/...]
   const match = path.match(/^\/([^/]+)(\/.+)$/)
@@ -90,6 +97,10 @@ export async function handleJit(
   }
   const ref = match[1]
   const subPath = match[2]
+
+  // L4: malformed ref → 400 before DB lookup.
+  const bad = assertValidRef(ref)
+  if (bad) return bad
 
   const project = await getProjectByRef(pool, ref, profileId)
   if (!project) {
@@ -136,6 +147,19 @@ export async function handleJit(
     return methodNotAllowedResponse()
   }
 
+  // Resolve backend lazily — only the mutation paths need it. GET /list and
+  // GET /jit-access only touch `traffic.jit_*` so skip the Vault lookup.
+  async function resolveBackend(): Promise<ProjectBackend | Response> {
+    try {
+      return await getProjectBackend(ref, pool)
+    } catch (err) {
+      if (err instanceof ProjectBackendNotProvisionedError) {
+        return notProvisionedResponse(err)
+      }
+      throw err
+    }
+  }
+
   // ── /database/jit ────────────────────────────────────────
   if (subPath === '/database/jit') {
     if (method === 'PUT' || method === 'POST') {
@@ -146,7 +170,17 @@ export async function handleJit(
         body = {}
       }
       const input = normalizeIssueInput(body)
-      const result = await issueGrant(pool, ref, input, profileId, gotrueId, auditContext)
+      const backendOrResponse = await resolveBackend()
+      if (backendOrResponse instanceof Response) return backendOrResponse
+      const result = await issueGrant(
+        pool,
+        ref,
+        backendOrResponse,
+        input,
+        profileId,
+        gotrueId,
+        auditContext,
+      )
       return Response.json(result, { status: 201, headers: corsHeaders })
     }
     return methodNotAllowedResponse()
@@ -163,7 +197,17 @@ export async function handleJit(
     if (!Number.isInteger(userId) || String(userId) !== rawUserId) {
       return invalidBodyResponse('user_id must be an integer')
     }
-    const result = await revokeGrant(pool, ref, userId, profileId, gotrueId, auditContext)
+    const backendOrResponse = await resolveBackend()
+    if (backendOrResponse instanceof Response) return backendOrResponse
+    const result = await revokeGrant(
+      pool,
+      ref,
+      backendOrResponse,
+      userId,
+      profileId,
+      gotrueId,
+      auditContext,
+    )
     return Response.json(result, { headers: corsHeaders })
   }
 

@@ -26,7 +26,9 @@ async function getTestSession() {
     password: 'test-password',
   })
   if (error || !session) {
-    throw new Error(`Failed to sign in test user: ${error?.message ?? 'no session'}`)
+    throw new Error(
+      `Failed to sign in test user: ${error?.message ?? 'no session'}`,
+    )
   }
   return session
 }
@@ -150,9 +152,12 @@ Deno.test('setup: create test org and project for project-network tests', async 
 Deno.test('GET /v1/projects/{ref}/network-restrictions returns documented shape', async () => {
   if (!testRef) return
   const session = await getTestSession()
-  const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/network-restrictions`, {
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/network-restrictions`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 200)
 
   const body = await res.json()
@@ -178,19 +183,22 @@ Deno.test(
   async () => {
     if (!testRef) return
     const session = await getTestSession()
-    const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/network-restrictions/apply`, {
-      method: 'POST',
-      headers: authHeaders(session.access_token),
-      body: JSON.stringify({
-        dbAllowedCidrs: ['0.0.0.0/0'],
-        dbAllowedCidrsV6: [],
-      }),
-    })
+    const res = await fetch(
+      `${V1_PROJECTS_URL}/${testRef}/network-restrictions/apply`,
+      {
+        method: 'POST',
+        headers: authHeaders(session.access_token),
+        body: JSON.stringify({
+          dbAllowedCidrs: ['0.0.0.0/0'],
+          dbAllowedCidrsV6: [],
+        }),
+      },
+    )
     assertEquals(res.status, 501)
     const body = await res.json()
     assertEquals(body.code, 'self_hosted_unsupported')
     assertExists(body.message)
-  }
+  },
 )
 
 // ── v1: network-bans ─────────────────────────────────────
@@ -200,18 +208,21 @@ Deno.test(
   async () => {
     if (!testRef) return
     const session = await getTestSession()
-    const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/network-bans/retrieve`, {
-      method: 'POST',
-      headers: authHeaders(session.access_token),
-      body: '{}',
-    })
+    const res = await fetch(
+      `${V1_PROJECTS_URL}/${testRef}/network-bans/retrieve`,
+      {
+        method: 'POST',
+        headers: authHeaders(session.access_token),
+        body: '{}',
+      },
+    )
     assertEquals(res.status, 200)
     const body = await res.json()
     assert(Array.isArray(body.banned_ipv4_addresses))
     assertEquals(body.banned_ipv4_addresses.length, 0)
     assert(Array.isArray(body.banned_ipv6_addresses))
     assertEquals(body.banned_ipv6_addresses.length, 0)
-  }
+  },
 )
 
 Deno.test('DELETE /v1/projects/{ref}/network-bans returns 200 with { success: true }', async () => {
@@ -234,16 +245,19 @@ for (const action of ['setup', 'remove'] as const) {
     async () => {
       if (!testRef) return
       const session = await getTestSession()
-      const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/read-replicas/${action}`, {
-        method: 'POST',
-        headers: authHeaders(session.access_token),
-        body: '{}',
-      })
+      const res = await fetch(
+        `${V1_PROJECTS_URL}/${testRef}/read-replicas/${action}`,
+        {
+          method: 'POST',
+          headers: authHeaders(session.access_token),
+          body: '{}',
+        },
+      )
       assertEquals(res.status, 501)
       const body = await res.json()
       assertEquals(body.code, 'self_hosted_unsupported')
       assertExists(body.message)
-    }
+    },
   )
 }
 
@@ -254,14 +268,17 @@ Deno.test(
   async () => {
     if (!testRef) return
     const session = await getTestSession()
-    const res = await fetch(`${PROJECTS_URL}/${testRef}/privatelink/associations`, {
-      headers: authHeaders(session.access_token),
-    })
+    const res = await fetch(
+      `${PROJECTS_URL}/${testRef}/privatelink/associations`,
+      {
+        headers: authHeaders(session.access_token),
+      },
+    )
     assertEquals(res.status, 200)
     const body = await res.json()
     assert(Array.isArray(body.associations))
     assertEquals(body.associations.length, 0)
-  }
+  },
 )
 
 Deno.test(
@@ -269,16 +286,19 @@ Deno.test(
   async () => {
     if (!testRef) return
     const session = await getTestSession()
-    const res = await fetch(`${PROJECTS_URL}/${testRef}/privatelink/associations/aws-account`, {
-      method: 'POST',
-      headers: authHeaders(session.access_token),
-      body: JSON.stringify({ aws_account_id: '123456789012' }),
-    })
+    const res = await fetch(
+      `${PROJECTS_URL}/${testRef}/privatelink/associations/aws-account`,
+      {
+        method: 'POST',
+        headers: authHeaders(session.access_token),
+        body: JSON.stringify({ aws_account_id: '123456789012' }),
+      },
+    )
     assertEquals(res.status, 501)
     const body = await res.json()
     assertEquals(body.code, 'self_hosted_unsupported')
     assertExists(body.message)
-  }
+  },
 )
 
 Deno.test(
@@ -291,31 +311,37 @@ Deno.test(
       {
         method: 'DELETE',
         headers: authHeaders(session.access_token),
-      }
+      },
     )
     assertEquals(res.status, 501)
     const body = await res.json()
     assertEquals(body.code, 'self_hosted_unsupported')
     assertExists(body.message)
-  }
+  },
 )
 
 // ── Unknown ref → 404 (spot-check one endpoint per dispatch side) ────────
 
 Deno.test('GET /v1/projects/{unknownRef}/network-restrictions returns 404', async () => {
   const session = await getTestSession()
-  const res = await fetch(`${V1_PROJECTS_URL}/nonexistent00000000/network-restrictions`, {
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/nonexistent00000000/network-restrictions`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 404)
   await res.body?.cancel()
 })
 
 Deno.test('GET /platform/projects/{unknownRef}/privatelink/associations returns 404', async () => {
   const session = await getTestSession()
-  const res = await fetch(`${PROJECTS_URL}/nonexistent00000000/privatelink/associations`, {
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${PROJECTS_URL}/nonexistent00000000/privatelink/associations`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 404)
   await res.body?.cancel()
 })

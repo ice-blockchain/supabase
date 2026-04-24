@@ -1,7 +1,8 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import { getProjectByRef } from '../services/project.service.ts'
+import { assertValidRef } from '../utils/ref-validation.ts'
 
 // Wave 3 / Bundle K — Project network + read-replicas + privatelink.
 //
@@ -31,7 +32,7 @@ const PRIVATELINK_UNSUPPORTED_MESSAGE =
 function notSupportedResponse(message: string): Response {
   return Response.json(
     { code: 'self_hosted_unsupported', message },
-    { status: 501, headers: corsHeaders }
+    { status: 501, headers: corsHeaders },
   )
 }
 
@@ -50,7 +51,7 @@ export async function handleProjectNetwork(
   pool: Pool,
   profileId: number,
   _gotrueId: string,
-  _email: string
+  _email: string,
 ): Promise<Response> {
   const refMatch = path.match(/^\/([^/]+)(\/.*)?$/)
   if (!refMatch) {
@@ -59,6 +60,10 @@ export async function handleProjectNetwork(
 
   const ref = refMatch[1]
   const subPath = refMatch[2] || ''
+
+  // L4: reject malformed refs before hitting the DB.
+  const bad = assertValidRef(ref)
+  if (bad) return bad
 
   const project = await getProjectByRef(pool, ref, profileId)
   if (!project) {
@@ -75,7 +80,7 @@ export async function handleProjectNetwork(
           new_config: { dbAllowedCidrs: [], dbAllowedCidrsV6: [] },
           status: 'applied',
         },
-        { headers: corsHeaders }
+        { headers: corsHeaders },
       )
     }
     return methodNotAllowedResponse()
@@ -100,7 +105,7 @@ export async function handleProjectNetwork(
     if (method === 'POST') {
       return Response.json(
         { banned_ipv4_addresses: [], banned_ipv6_addresses: [] },
-        { headers: corsHeaders }
+        { headers: corsHeaders },
       )
     }
     return methodNotAllowedResponse()

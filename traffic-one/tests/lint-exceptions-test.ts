@@ -25,7 +25,9 @@ async function getTestSession() {
     password: 'test-password',
   })
   if (error || !session) {
-    throw new Error(`Failed to sign in test user: ${error?.message ?? 'no session'}`)
+    throw new Error(
+      `Failed to sign in test user: ${error?.message ?? 'no session'}`,
+    )
   }
   return session
 }
@@ -42,23 +44,28 @@ function authHeaders(token: string): Record<string, string> {
 Deno.test(
   'GET /projects/{ref}/notifications/advisor/exceptions returns 401 without auth',
   async () => {
-    const res = await fetch(`${PROJECTS_URL}/some-ref/notifications/advisor/exceptions`)
+    const res = await fetch(
+      `${PROJECTS_URL}/some-ref/notifications/advisor/exceptions`,
+    )
     assertEquals(res.status, 401)
     await res.body?.cancel()
-  }
+  },
 )
 
 Deno.test(
   'POST /projects/{ref}/notifications/advisor/exceptions returns 401 without auth',
   async () => {
-    const res = await fetch(`${PROJECTS_URL}/some-ref/notifications/advisor/exceptions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lint_name: 'x', disabled: true }),
-    })
+    const res = await fetch(
+      `${PROJECTS_URL}/some-ref/notifications/advisor/exceptions`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lint_name: 'x', disabled: true }),
+      },
+    )
     assertEquals(res.status, 401)
     await res.body?.cancel()
-  }
+  },
 )
 
 Deno.test(
@@ -66,11 +73,11 @@ Deno.test(
   async () => {
     const res = await fetch(
       `${PROJECTS_URL}/some-ref/notifications/advisor/exceptions?lint_name=x`,
-      { method: 'DELETE' }
+      { method: 'DELETE' },
     )
     assertEquals(res.status, 401)
     await res.body?.cancel()
-  }
+  },
 )
 
 // ── Setup ───────────────────────────────────────────────
@@ -113,11 +120,11 @@ Deno.test(
     const session = await getTestSession()
     const res = await fetch(
       `${PROJECTS_URL}/nonexistent00000000/notifications/advisor/exceptions`,
-      { headers: authHeaders(session.access_token) }
+      { headers: authHeaders(session.access_token) },
     )
     assertEquals(res.status, 404)
     await res.body?.cancel()
-  }
+  },
 )
 
 // ── GET empty ───────────────────────────────────────────
@@ -125,9 +132,12 @@ Deno.test(
 Deno.test('GET /notifications/advisor/exceptions returns empty array before any POST', async () => {
   if (!testRef) return
   const session = await getTestSession()
-  const res = await fetch(`${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`, {
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 200)
   const body = await res.json()
   assert(Array.isArray(body))
@@ -141,24 +151,30 @@ Deno.test('POST /notifications/advisor/exceptions persists and later GET returns
   const session = await getTestSession()
   const lintName = `unindexed_foreign_keys_${Date.now()}`
 
-  const postRes = await fetch(`${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`, {
-    method: 'POST',
-    headers: authHeaders(session.access_token),
-    body: JSON.stringify({
-      lint_name: lintName,
-      disabled: true,
-      metadata: { note: 'acknowledged by admin' },
-    }),
-  })
+  const postRes = await fetch(
+    `${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`,
+    {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({
+        lint_name: lintName,
+        disabled: true,
+        metadata: { note: 'acknowledged by admin' },
+      }),
+    },
+  )
   assertEquals(postRes.status, 201)
   const created = await postRes.json()
   assertEquals(created.lint_name, lintName)
   assertEquals(created.disabled, true)
   assertExists(created.inserted_at)
 
-  const getRes = await fetch(`${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`, {
-    headers: authHeaders(session.access_token),
-  })
+  const getRes = await fetch(
+    `${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(getRes.status, 200)
   const body = await getRes.json()
   assert(Array.isArray(body))
@@ -176,41 +192,53 @@ Deno.test(
     const session = await getTestSession()
     const lintName = `rls_disabled_${Date.now()}`
 
-    const firstRes = await fetch(`${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`, {
-      method: 'POST',
-      headers: authHeaders(session.access_token),
-      body: JSON.stringify({ lint_name: lintName, disabled: true }),
-    })
+    const firstRes = await fetch(
+      `${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`,
+      {
+        method: 'POST',
+        headers: authHeaders(session.access_token),
+        body: JSON.stringify({ lint_name: lintName, disabled: true }),
+      },
+    )
     assertEquals(firstRes.status, 201)
     await firstRes.body?.cancel()
 
-    const secondRes = await fetch(`${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`, {
-      method: 'POST',
-      headers: authHeaders(session.access_token),
-      body: JSON.stringify({ lint_name: lintName, disabled: false }),
-    })
+    const secondRes = await fetch(
+      `${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`,
+      {
+        method: 'POST',
+        headers: authHeaders(session.access_token),
+        body: JSON.stringify({ lint_name: lintName, disabled: false }),
+      },
+    )
     assertEquals(secondRes.status, 201)
     const second = await secondRes.json()
     assertEquals(second.disabled, false)
 
-    const getRes = await fetch(`${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`, {
-      headers: authHeaders(session.access_token),
-    })
+    const getRes = await fetch(
+      `${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`,
+      {
+        headers: authHeaders(session.access_token),
+      },
+    )
     const body = await getRes.json()
     const matches = body.filter((e: { lint_name: string }) => e.lint_name === lintName)
     assertEquals(matches.length, 1)
     assertEquals(matches[0].disabled, false)
-  }
+  },
 )
 
 Deno.test('POST /notifications/advisor/exceptions without lint_name returns 400', async () => {
   if (!testRef) return
   const session = await getTestSession()
-  const res = await fetch(`${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`, {
-    method: 'POST',
-    headers: authHeaders(session.access_token),
-    body: JSON.stringify({ disabled: true }),
-  })
+  const res = await fetch(
+    `${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`,
+    {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({ disabled: true }),
+    },
+  )
   assertEquals(res.status, 400)
   await res.body?.cancel()
 })
@@ -222,11 +250,14 @@ Deno.test('DELETE /notifications/advisor/exceptions by lint_name query removes r
   const session = await getTestSession()
   const lintName = `auth_allow_anonymous_sign_ins_${Date.now()}`
 
-  const postRes = await fetch(`${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`, {
-    method: 'POST',
-    headers: authHeaders(session.access_token),
-    body: JSON.stringify({ lint_name: lintName, disabled: true }),
-  })
+  const postRes = await fetch(
+    `${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`,
+    {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({ lint_name: lintName, disabled: true }),
+    },
+  )
   assertEquals(postRes.status, 201)
   await postRes.body?.cancel()
 
@@ -235,18 +266,25 @@ Deno.test('DELETE /notifications/advisor/exceptions by lint_name query removes r
     {
       method: 'DELETE',
       headers: authHeaders(session.access_token),
-    }
+    },
   )
   assertEquals(delRes.status, 200)
   const delBody = await delRes.json()
   assertEquals(delBody.deleted, true)
 
-  const getRes = await fetch(`${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`, {
-    headers: authHeaders(session.access_token),
-  })
+  const getRes = await fetch(
+    `${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   const body = await getRes.json()
   const remaining = body.find((e: { lint_name: string }) => e.lint_name === lintName)
-  assertEquals(remaining, undefined, 'Deleted exception must not appear in GET')
+  assertEquals(
+    remaining,
+    undefined,
+    'Deleted exception must not appear in GET',
+  )
 })
 
 Deno.test(
@@ -259,20 +297,23 @@ Deno.test(
       {
         method: 'DELETE',
         headers: authHeaders(session.access_token),
-      }
+      },
     )
     assertEquals(res.status, 404)
     await res.body?.cancel()
-  }
+  },
 )
 
 Deno.test('DELETE /notifications/advisor/exceptions without lint_name returns 400', async () => {
   if (!testRef) return
   const session = await getTestSession()
-  const res = await fetch(`${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`, {
-    method: 'DELETE',
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${PROJECTS_URL}/${testRef}/notifications/advisor/exceptions`,
+    {
+      method: 'DELETE',
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 400)
   await res.body?.cancel()
 })

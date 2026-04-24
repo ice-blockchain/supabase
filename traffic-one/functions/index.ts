@@ -15,6 +15,8 @@ import { handleNotifications } from './routes/notifications.ts'
 import { handleOrganizations, handleV1Organizations } from './routes/organizations.ts'
 import { handlePermissions } from './routes/permissions.ts'
 import { handleProfile } from './routes/profile.ts'
+import { handleProjectAuthAdmin } from './routes/project-auth-admin.ts'
+import { handleProjectPgMeta } from './routes/project-pg-meta.ts'
 import { handleProjectHealth, handleProjects } from './routes/projects.ts'
 import { handleReplication } from './routes/replication.ts'
 import { handleScopedAccessTokens } from './routes/scoped-access-tokens.ts'
@@ -68,7 +70,7 @@ Deno.serve(async (req: Request) => {
       {
         status: 401,
         headers: corsHeaders,
-      }
+      },
     )
   }
 
@@ -130,7 +132,27 @@ Deno.serve(async (req: Request) => {
 
     if (path === '/api/platform/auth' || path.startsWith('/api/platform/auth/')) {
       const authPath = path.replace(/^\/api\/platform\/auth/, '') || '/'
-      return handleAuthConfig(req, authPath, method, pool, profileId, gotrueId, email)
+      // Config paths stay on the env-merge + override-table flow (Wave 1);
+      // everything else (users / invite / magiclink / recover / otp /
+      // users/{id}/factors / validate/spam) dispatches to the per-project
+      // GoTrue backend via the project-backend resolver.
+      const isConfigPath = /^\/[^/]+\/config(\/hooks)?$/.test(authPath)
+      if (isConfigPath) {
+        return handleAuthConfig(req, authPath, method, pool, profileId, gotrueId, email)
+      }
+      return handleProjectAuthAdmin(req, authPath, method, pool, profileId, gotrueId, email)
+    }
+
+    // Phase 4 — /api/platform/pg-meta/{ref}/* proxies to the per-project pg-meta
+    // (backend.pgMetaUrl) signed with the project service_role key. Studio's
+    // Next stubs under apps/studio/pages/api/platform/pg-meta/[ref]/* sign
+    // with a single shared PG_META_URL / SUPABASE_SERVICE_KEY, which breaks
+    // the moment the tenant's pg-meta lives elsewhere. Kong's platform-pg-meta
+    // route uses strip_path: false so the full path lands here intact; we
+    // trim the `/api/platform/pg-meta` prefix before dispatch.
+    if (path === '/api/platform/pg-meta' || path.startsWith('/api/platform/pg-meta/')) {
+      const pgMetaPath = path.replace(/^\/api\/platform\/pg-meta/, '') || '/'
+      return handleProjectPgMeta(req, pgMetaPath, method, pool, profileId, gotrueId, email)
     }
 
     if (path.startsWith('/stripe')) {
@@ -202,13 +224,13 @@ Deno.serve(async (req: Request) => {
       {
         status: 404,
         headers: corsHeaders,
-      }
+      },
     )
   } catch (err) {
     console.error('traffic-one error:', err)
     return Response.json(
       { message: 'Internal Server Error' },
-      { status: 500, headers: corsHeaders }
+      { status: 500, headers: corsHeaders },
     )
   }
 })

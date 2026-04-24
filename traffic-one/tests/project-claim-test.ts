@@ -6,7 +6,11 @@ import 'jsr:@std/dotenv/load'
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!
 const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
 })
 
 // Served by the new `v1-organizations` Kong service (Bundle G).
@@ -22,7 +26,9 @@ async function getTestSession() {
     password: 'test-password',
   })
   if (error || !session) {
-    throw new Error(`Failed to sign in test user: ${error?.message ?? 'no session'}`)
+    throw new Error(
+      `Failed to sign in test user: ${error?.message ?? 'no session'}`,
+    )
   }
   return session
 }
@@ -39,7 +45,10 @@ async function createTempOrg(token: string): Promise<string> {
   const res = await fetch(PLATFORM_ORG_URL, {
     method: 'POST',
     headers: authHeaders(token),
-    body: JSON.stringify({ name: `ProjectClaim Test ${Date.now()}`, tier: 'tier_free' }),
+    body: JSON.stringify({
+      name: `ProjectClaim Test ${Date.now()}`,
+      tier: 'tier_free',
+    }),
   })
   assertEquals(res.status, 201)
   const org = await res.json()
@@ -61,7 +70,7 @@ Deno.test(
     const res = await fetch(`${V1_ORG_URL}/anything/project-claim/token-abc`)
     assertEquals(res.status, 401)
     await res.body?.cancel()
-  }
+  },
 )
 
 Deno.test(
@@ -73,7 +82,7 @@ Deno.test(
     })
     assertEquals(res.status, 401)
     await res.body?.cancel()
-  }
+  },
 )
 
 // ── Kong routing smoke test ─────────────────────────────
@@ -92,10 +101,10 @@ Deno.test(
     assertEquals(
       contentType.includes('application/json'),
       true,
-      `expected JSON response from traffic-one, got ${contentType}`
+      `expected JSON response from traffic-one, got ${contentType}`,
     )
     await res.body?.cancel()
-  }
+  },
 )
 
 // ── Happy path (self-hosted stub) ───────────────────────
@@ -115,7 +124,7 @@ Deno.test(
     } finally {
       await cleanupOrg(session.access_token, slug)
     }
-  }
+  },
 )
 
 Deno.test(
@@ -135,16 +144,19 @@ Deno.test(
     } finally {
       await cleanupOrg(session.access_token, slug)
     }
-  }
+  },
 )
 
 // ── 404 on unknown org / unknown path ───────────────────
 
 Deno.test('GET /v1/organizations/{unknown-slug}/project-claim/{token} returns 404', async () => {
   const session = await getTestSession()
-  const res = await fetch(`${V1_ORG_URL}/does-not-exist-bundle-g/project-claim/any-token`, {
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${V1_ORG_URL}/does-not-exist-bundle-g/project-claim/any-token`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 404)
   await res.body?.cancel()
 })

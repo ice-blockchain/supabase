@@ -25,7 +25,9 @@ async function getTestSession() {
     password: 'test-password',
   })
   if (error || !session) {
-    throw new Error(`Failed to sign in test user: ${error?.message ?? 'no session'}`)
+    throw new Error(
+      `Failed to sign in test user: ${error?.message ?? 'no session'}`,
+    )
   }
   return session
 }
@@ -101,9 +103,12 @@ Deno.test('setup: create test org and project for project-config tests', async (
 
 Deno.test('GET /projects/{unknownRef}/config/postgrest returns 404', async () => {
   const session = await getTestSession()
-  const res = await fetch(`${PROJECTS_URL}/nonexistent0000000x/config/postgrest`, {
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${PROJECTS_URL}/nonexistent0000000x/config/postgrest`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 404)
   await res.body?.cancel()
 })
@@ -175,6 +180,7 @@ Deno.test('PATCH /config/storage persists fileSizeLimit override', async () => {
     body: JSON.stringify({ fileSizeLimit: 104857600 }),
   })
   assertEquals(res.status, 200)
+  await res.body?.cancel()
 
   const getRes = await fetch(`${PROJECTS_URL}/${testRef}/config/storage`, {
     headers: authHeaders(session.access_token),
@@ -208,6 +214,7 @@ Deno.test('PATCH /config/realtime persists override', async () => {
     body: JSON.stringify({ enabled: false }),
   })
   assertEquals(res.status, 200)
+  await res.body?.cancel()
 
   const getRes = await fetch(`${PROJECTS_URL}/${testRef}/config/realtime`, {
     headers: authHeaders(session.access_token),
@@ -251,9 +258,12 @@ Deno.test('PATCH /config/pgbouncer persists override', async () => {
 Deno.test('GET /config/pgbouncer/status returns { enabled: true }', async () => {
   if (!testRef) return
   const session = await getTestSession()
-  const res = await fetch(`${PROJECTS_URL}/${testRef}/config/pgbouncer/status`, {
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${PROJECTS_URL}/${testRef}/config/pgbouncer/status`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 200)
   const body = await res.json()
   assertEquals(body.enabled, true)
@@ -294,7 +304,7 @@ Deno.test(
 
     const first = await fetch(
       `${PROJECTS_URL}/${testRef}/config/secrets/update-status?request_id=${reqId}`,
-      { headers: authHeaders(session.access_token) }
+      { headers: authHeaders(session.access_token) },
     )
     assertEquals(first.status, 200)
     const firstBody = await first.json()
@@ -303,7 +313,7 @@ Deno.test(
 
     const second = await fetch(
       `${PROJECTS_URL}/${testRef}/config/secrets/update-status?request_id=${reqId}`,
-      { headers: authHeaders(session.access_token) }
+      { headers: authHeaders(session.access_token) },
     )
     assertEquals(second.status, 200)
     const secondBody = await second.json()
@@ -311,11 +321,11 @@ Deno.test(
 
     const third = await fetch(
       `${PROJECTS_URL}/${testRef}/config/secrets/update-status?request_id=${reqId}`,
-      { headers: authHeaders(session.access_token) }
+      { headers: authHeaders(session.access_token) },
     )
     const thirdBody = await third.json()
     assertEquals(thirdBody.status, 'succeeded')
-  }
+  },
 )
 
 // ── /settings/sensitivity ────────────────────────────────
@@ -372,6 +382,16 @@ Deno.test('PATCH /db-password returns 200 with acknowledged even on failure', as
   assertEquals(res.status, 200)
   const body = await res.json()
   assertEquals(body.result, 'acknowledged')
+  // H3: the route now surfaces `applied` so Studio can tell whether the
+  // `ALTER ROLE ... WITH PASSWORD` actually reached the project DB (true)
+  // or whether the request fell through to a Vault-only rotation (false).
+  // We don't assert on the exact value — either outcome is acceptable
+  // depending on whether the ALTER ROLE path is reachable from this test
+  // run — but the field MUST be present and boolean-typed.
+  assert(
+    typeof body.applied === 'boolean',
+    '`applied` must be a boolean (H3 contract)',
+  )
 })
 
 Deno.test('PATCH /db-password rejects missing password with 400', async () => {

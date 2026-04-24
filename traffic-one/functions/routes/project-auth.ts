@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import { createSecret, deleteSecret, listSecretNames } from '../services/project-secrets.service.ts'
@@ -13,6 +13,7 @@ import {
 } from '../services/project-third-party-auth.service.ts'
 import { getProjectByRef } from '../services/project.service.ts'
 import { getClientIp } from '../utils/client-ip.ts'
+import { assertValidRef } from '../utils/ref-validation.ts'
 
 // Handler for /v1/projects/{ref}/* auth-related paths:
 //   /{ref}/config/auth/third-party-auth[/{id}]  (GET, POST, DELETE)
@@ -83,7 +84,7 @@ async function handleThirdPartyAuthCollection(
   organizationId: number,
   profileId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<Response> {
   if (method === 'GET') {
     const rows = await listThirdPartyAuth(pool, projectRef)
@@ -104,7 +105,7 @@ async function handleThirdPartyAuthCollection(
         input,
         profileId,
         gotrueId,
-        auditContext
+        auditContext,
       )
       return Response.json(serializeThirdPartyAuth(row), {
         status: 201,
@@ -129,7 +130,7 @@ async function handleThirdPartyAuthItem(
   id: string,
   profileId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<Response> {
   if (!UUID_PATTERN.test(id)) {
     return notFoundResponse('Integration not found')
@@ -149,7 +150,7 @@ async function handleThirdPartyAuthItem(
       id,
       profileId,
       gotrueId,
-      auditContext
+      auditContext,
     )
     if (!row) return notFoundResponse('Integration not found')
     return Response.json(serializeThirdPartyAuth(row), { headers: corsHeaders })
@@ -185,7 +186,7 @@ async function writeSslEnforcement(
   mode: SslDatabaseMode,
   profileId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<void> {
   const connection = await pool.connect()
   try {
@@ -207,7 +208,9 @@ async function writeSslEnforcement(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, 'project.ssl_enforcement_updated',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'project_config ssl_enforcement (ref: ' + projectRef + ')'},
@@ -230,7 +233,7 @@ async function handleSslEnforcement(
   organizationId: number,
   profileId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<Response> {
   if (method === 'GET') {
     const mode = await readSslEnforcement(pool, projectRef)
@@ -239,7 +242,7 @@ async function handleSslEnforcement(
         currentConfig: { database: mode },
         appliedSuccessfully: true,
       },
-      { headers: corsHeaders }
+      { headers: corsHeaders },
     )
   }
 
@@ -260,14 +263,14 @@ async function handleSslEnforcement(
       db,
       profileId,
       gotrueId,
-      auditContext
+      auditContext,
     )
     return Response.json(
       {
         currentConfig: { database: db },
         appliedSuccessfully: true,
       },
-      { headers: corsHeaders }
+      { headers: corsHeaders },
     )
   }
 
@@ -331,7 +334,7 @@ async function insertSecretAudit(
   secretName: string,
   profileId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<void> {
   const connection = await pool.connect()
   try {
@@ -343,7 +346,9 @@ async function insertSecretAudit(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, ${action},
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'project_secrets (ref: ' + projectRef + ', name: ' + secretName + ')'},
@@ -364,7 +369,7 @@ async function handleSecrets(
   organizationId: number,
   profileId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<Response> {
   if (method === 'GET') {
     const names = await listSecretNames(pool, projectRef)
@@ -389,7 +394,7 @@ async function handleSecrets(
         payload.name,
         profileId,
         gotrueId,
-        auditContext
+        auditContext,
       )
       results.push({ name: result.name, status: result.status })
     }
@@ -416,7 +421,7 @@ async function handleSecrets(
           name,
           profileId,
           gotrueId,
-          auditContext
+          auditContext,
         )
         deleted.push(name)
       }
@@ -437,12 +442,16 @@ export async function handleProjectAuth(
   pool: Pool,
   profileId: number,
   gotrueId: string,
-  email: string
+  email: string,
 ): Promise<Response> {
   const refMatch = path.match(/^\/([^/]+)(\/.*)?$/)
   if (!refMatch) return notFoundResponse()
   const ref = refMatch[1]
   const subPath = refMatch[2] || ''
+
+  // L4: reject malformed refs before hitting the DB.
+  const bad = assertValidRef(ref)
+  if (bad) return bad
 
   const project = await getProjectByRef(pool, ref, profileId)
   if (!project) return notFoundResponse('Project not found')
@@ -464,7 +473,7 @@ export async function handleProjectAuth(
       project.organization_id,
       profileId,
       gotrueId,
-      auditContext
+      auditContext,
     )
   }
 
@@ -478,7 +487,7 @@ export async function handleProjectAuth(
       itemMatch[1],
       profileId,
       gotrueId,
-      auditContext
+      auditContext,
     )
   }
 
@@ -491,7 +500,7 @@ export async function handleProjectAuth(
       project.organization_id,
       profileId,
       gotrueId,
-      auditContext
+      auditContext,
     )
   }
 
@@ -504,7 +513,7 @@ export async function handleProjectAuth(
       project.organization_id,
       profileId,
       gotrueId,
-      auditContext
+      auditContext,
     )
   }
 

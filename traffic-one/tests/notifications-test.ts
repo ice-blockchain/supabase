@@ -1,4 +1,4 @@
-import { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 import { assert, assertEquals, assertExists } from 'jsr:@std/assert@1'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
@@ -7,7 +7,11 @@ import 'jsr:@std/dotenv/load'
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!
 const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
 })
 
 const NOTIFICATIONS_URL = `${supabaseUrl}/api/platform/notifications`
@@ -26,7 +30,9 @@ async function getTestSession() {
     password: 'test-password',
   })
   if (error || !session) {
-    throw new Error(`Failed to sign in test user: ${error?.message ?? 'no session'}`)
+    throw new Error(
+      `Failed to sign in test user: ${error?.message ?? 'no session'}`,
+    )
   }
   return session
 }
@@ -48,7 +54,7 @@ async function getTestProfileId(token: string): Promise<number> {
 async function seedNotification(
   profileId: number,
   name: string,
-  status: 'new' | 'seen' | 'archived'
+  status: 'new' | 'seen' | 'archived',
 ): Promise<string> {
   const connection = await pool.connect()
   try {
@@ -102,13 +108,17 @@ Deno.test(
     const body = await res.json()
     assert(Array.isArray(body), 'notifications list must be an array')
 
-    const found = (body as Array<{ id: string; name: string; status: string }>).find(
-      (n) => n.id === seededId
+    const found = (body as Array<{ id: string; name: string; status: string }>)
+      .find(
+        (n) => n.id === seededId,
+      )
+    assertExists(
+      found,
+      'seeded notification should be returned by the real handler',
     )
-    assertExists(found, 'seeded notification should be returned by the real handler')
     assertEquals(found!.name, seededName)
     assertEquals(found!.status, 'new')
-  }
+  },
 )
 
 // ── Summary ──────────────────────────────────────────────
@@ -131,14 +141,17 @@ Deno.test(
     })
     assertEquals(res.status, 200)
     const body = await res.json()
-    assert(!Array.isArray(body), 'summary must be an object, not an array (Kong-stub shape)')
+    assert(
+      !Array.isArray(body),
+      'summary must be an object, not an array (Kong-stub shape)',
+    )
     assertEquals(typeof body.unread_count, 'number')
     assertEquals(typeof body.read_count, 'number')
     assertEquals(body.unread_count, 2)
     // `read_count` must aggregate seen + archived so the bell does not drop to
     // 0/0 once notifications are archived. (Regression test for H1.)
     assertEquals(body.read_count, 2)
-  }
+  },
 )
 
 // ── PATCH array body (Studio Version-2) ──────────────────
@@ -164,20 +177,25 @@ Deno.test(
     })
     assertEquals(res.status, 200)
     const updated = await res.json()
-    assert(Array.isArray(updated), 'PATCH response must be an array of updated rows')
+    assert(
+      Array.isArray(updated),
+      'PATCH response must be an array of updated rows',
+    )
     assertEquals(updated.length, 2)
 
     const list = await fetch(NOTIFICATIONS_URL, {
       headers: authHeaders(session.access_token),
     })
-    const notifications = (await list.json()) as Array<{ id: string; status: string }>
+    const notifications = (await list.json()) as Array<
+      { id: string; status: string }
+    >
     const seen = notifications.find((n) => n.id === id1)
     const archived = notifications.find((n) => n.id === id2)
     assertExists(seen)
     assertExists(archived)
     assertEquals(seen!.status, 'seen')
     assertEquals(archived!.status, 'archived')
-  }
+  },
 )
 
 // ── PATCH /archive-all (Studio Version-2) ────────────────
@@ -215,7 +233,7 @@ Deno.test(
     }).then((r) => r.json())
     assertEquals(post.unread_count, 0)
     assertEquals(post.read_count, 3)
-  }
+  },
 )
 
 // ── Method-not-allowed (create is not supported) ─────────
@@ -241,7 +259,10 @@ Deno.test('POST /api/platform/notifications returns 405', async () => {
 // test). If either breaks, Studio's bell silently goes blank.
 
 Deno.test('H7: kong.yml no longer defines the platform-notifications-stub', async () => {
-  const kongPath = new URL('../../docker/volumes/api/kong.yml', import.meta.url)
+  const kongPath = new URL(
+    '../../docker/volumes/api/kong.yml',
+    import.meta.url,
+  )
   let kong: string
   try {
     kong = await Deno.readTextFile(kongPath)
@@ -252,11 +273,11 @@ Deno.test('H7: kong.yml no longer defines the platform-notifications-stub', asyn
   }
   assert(
     !kong.includes('platform-notifications-stub'),
-    'kong.yml must not re-introduce the static notifications stub service'
+    'kong.yml must not re-introduce the static notifications stub service',
   )
   // Sanity-check the replacement is wired up.
   assert(
     kong.includes('platform-notifications'),
-    'kong.yml must still expose /api/platform/notifications via the edge function'
+    'kong.yml must still expose /api/platform/notifications via the edge function',
   )
 })

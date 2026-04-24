@@ -6,7 +6,11 @@ import 'jsr:@std/dotenv/load'
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!
 const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
 })
 
 const V1_PROJECTS_URL = `${supabaseUrl}/api/v1/projects`
@@ -22,7 +26,9 @@ async function getTestSession() {
     password: 'test-password',
   })
   if (error || !session) {
-    throw new Error(`Failed to sign in test user: ${error?.message ?? 'no session'}`)
+    throw new Error(
+      `Failed to sign in test user: ${error?.message ?? 'no session'}`,
+    )
   }
   return session
 }
@@ -61,14 +67,17 @@ Deno.test('POST /v1/projects/{ref}/upgrade returns 401 without auth', async () =
 Deno.test(
   'POST /v1/projects/{ref}/readonly/temporary-disable returns 401 without auth',
   async () => {
-    const res = await fetch(`${V1_PROJECTS_URL}/some-ref/readonly/temporary-disable`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-    })
+    const res = await fetch(
+      `${V1_PROJECTS_URL}/some-ref/readonly/temporary-disable`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      },
+    )
     assertEquals(res.status, 401)
     await res.body?.cancel()
-  }
+  },
 )
 
 Deno.test('GET /v1/projects/{ref}/actions returns 401 without auth', async () => {
@@ -120,9 +129,12 @@ Deno.test('setup: create test org and project for lifecycle tests', async () => 
 
 Deno.test('GET /v1/projects/{unknownRef}/upgrade/eligibility returns 404', async () => {
   const session = await getTestSession()
-  const res = await fetch(`${V1_PROJECTS_URL}/nonexistent00000000/upgrade/eligibility`, {
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/nonexistent00000000/upgrade/eligibility`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 404)
   await res.body?.cancel()
 })
@@ -185,15 +197,18 @@ Deno.test(
   async () => {
     if (!testRef) return
     const session = await getTestSession()
-    const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/readonly/temporary-disable`, {
-      method: 'POST',
-      headers: authHeaders(session.access_token),
-      body: '{}',
-    })
+    const res = await fetch(
+      `${V1_PROJECTS_URL}/${testRef}/readonly/temporary-disable`,
+      {
+        method: 'POST',
+        headers: authHeaders(session.access_token),
+        body: '{}',
+      },
+    )
     assertEquals(res.status, 200)
     const body = await res.json()
     assertEquals(body.success, true)
-  }
+  },
 )
 
 // ── /actions ─────────────────────────────────────────────
@@ -255,9 +270,9 @@ Deno.test(
     // must expose a top-level `export type Database` declaration.
     assert(
       (body.types as string).includes('export type Database'),
-      'types output must include `export type Database`'
+      'types output must include `export type Database`',
     )
-  }
+  },
 )
 
 Deno.test(
@@ -267,13 +282,13 @@ Deno.test(
     const session = await getTestSession()
     const res = await fetch(
       `${V1_PROJECTS_URL}/${testRef}/types/typescript?included_schemas=public`,
-      { headers: authHeaders(session.access_token) }
+      { headers: authHeaders(session.access_token) },
     )
     assertEquals(res.status, 200)
     const body = await res.json()
     assertExists(body.types)
     assertEquals(typeof body.types, 'string')
-  }
+  },
 )
 
 // ── Method-not-allowed sanity ────────────────────────────
@@ -293,9 +308,12 @@ Deno.test('PUT /v1/projects/{ref}/upgrade/eligibility returns 405', async () => 
 Deno.test('GET /v1/projects/{ref}/readonly/temporary-disable returns 405', async () => {
   if (!testRef) return
   const session = await getTestSession()
-  const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/readonly/temporary-disable`, {
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/readonly/temporary-disable`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 405)
   await res.body?.cancel()
 })

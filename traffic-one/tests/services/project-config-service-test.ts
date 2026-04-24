@@ -1,8 +1,8 @@
-import { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
 import { assert, assertEquals, assertRejects } from 'jsr:@std/assert@1'
 
 import 'jsr:@std/dotenv/load'
 
+import { createRetryingPool } from '../_helpers/pool.ts'
 import {
   CONFIG_DEFAULTS,
   InvalidSensitivityError,
@@ -11,7 +11,7 @@ import {
   updateProjectSensitivity,
 } from '../../functions/services/project-config.service.ts'
 
-const pool = new Pool(Deno.env.get('TRAFFIC_DB_URL')!, 1, true)
+const pool = createRetryingPool(Deno.env.get('TRAFFIC_DB_URL')!)
 
 // ── Pure validators (no DB) ─────────────────────────────
 
@@ -38,7 +38,12 @@ Deno.test('CONFIG_DEFAULTS expose exactly the documented shapes', () => {
   assertEquals(CONFIG_DEFAULTS.storage.fileSizeLimit, 52428800)
   assertEquals(CONFIG_DEFAULTS.storage.isFreeTier, true)
   assertEquals(CONFIG_DEFAULTS.realtime.enabled, true)
-  assert(Array.isArray((CONFIG_DEFAULTS.realtime as { db_publications: unknown }).db_publications))
+  assert(
+    Array.isArray(
+      (CONFIG_DEFAULTS.realtime as { db_publications: unknown })
+        .db_publications,
+    ),
+  )
   assertEquals(CONFIG_DEFAULTS.pgbouncer.pool_mode, 'transaction')
   assertEquals(CONFIG_DEFAULTS.secrets.jwt_secret, '***')
   assertEquals(CONFIG_DEFAULTS.secrets.service_role_key, '***')
@@ -63,11 +68,11 @@ Deno.test(
             ip: '127.0.0.1',
             method: 'PATCH',
             route: '/projects/pcfg_ref_fake/settings/sensitivity',
-          }
+          },
         ),
-      InvalidSensitivityError
+      InvalidSensitivityError,
     )
-  }
+  },
 )
 
 Deno.test('updateProjectSensitivity rejects empty string', async () => {
@@ -85,9 +90,9 @@ Deno.test('updateProjectSensitivity rejects empty string', async () => {
           ip: '127.0.0.1',
           method: 'PATCH',
           route: '/projects/pcfg_ref_fake2/settings/sensitivity',
-        }
+        },
       ),
-    InvalidSensitivityError
+    InvalidSensitivityError,
   )
 })
 
@@ -96,9 +101,8 @@ Deno.test('updateProjectSensitivity rejects empty string', async () => {
 Deno.test(
   'project_config JSONB || merges only the target section — other sections untouched',
   async () => {
-    const connection = await pool.connect()
-    const tx = connection.createTransaction('test_project_config_merge')
-    try {
+    await pool.withConnection(async (connection) => {
+      const tx = connection.createTransaction('test_project_config_merge')
       await tx.begin()
 
       await tx.queryObject`
@@ -148,18 +152,15 @@ Deno.test(
       assertEquals(pgb.default_pool_size, 20, 'pgbouncer untouched')
 
       await tx.rollback()
-    } finally {
-      connection.release()
-    }
-  }
+    })
+  },
 )
 
 Deno.test(
   'project_config upsert-on-conflict creates-or-merges without clobbering other sections',
   async () => {
-    const connection = await pool.connect()
-    const tx = connection.createTransaction('test_project_config_upsert')
-    try {
+    await pool.withConnection(async (connection) => {
+      const tx = connection.createTransaction('test_project_config_upsert')
       await tx.begin()
 
       // First upsert creates the row with storage overrides.
@@ -191,15 +192,13 @@ Deno.test(
       assertEquals(
         (row.storage as { fileSizeLimit: number }).fileSizeLimit,
         10,
-        'storage section survived a realtime upsert'
+        'storage section survived a realtime upsert',
       )
       assertEquals((row.realtime as { enabled: boolean }).enabled, false)
 
       await tx.rollback()
-    } finally {
-      connection.release()
-    }
-  }
+    })
+  },
 )
 
 // ── rotateJwtSecret idempotency (mirrors service read-then-write-if-different) ──
@@ -207,9 +206,8 @@ Deno.test(
 Deno.test(
   'rotation: same request_id idempotent (re-submit returns stored pending row unchanged)',
   async () => {
-    const connection = await pool.connect()
-    const tx = connection.createTransaction('test_rotation_idempotent')
-    try {
+    await pool.withConnection(async (connection) => {
+      const tx = connection.createTransaction('test_rotation_idempotent')
       await tx.begin()
 
       const firstRequestId = '00000000-0000-0000-0000-0000aaaaaaaa'
@@ -231,14 +229,22 @@ Deno.test(
       // Mirror service: re-submitting same request_id reads existing row and
       // returns it as-is without overwriting requested_at.
       const existing = await tx.queryObject<{
-        secrets_rotation: { status: string; request_id: string; requested_at: string }
+        secrets_rotation: {
+          status: string
+          request_id: string
+          requested_at: string
+        }
       }>`
         SELECT secrets_rotation
         FROM traffic.project_config WHERE project_ref = 'pcfg_ref_rot'
       `
       const current = existing.rows[0].secrets_rotation
       assertEquals(current.request_id, firstRequestId)
-      assertEquals(current.requested_at, firstRequestedAt, 'requested_at unchanged for same id')
+      assertEquals(
+        current.requested_at,
+        firstRequestedAt,
+        'requested_at unchanged for same id',
+      )
       assertEquals(current.status, 'pending')
 
       // Different request_id → replace (not idempotent).
@@ -264,16 +270,13 @@ Deno.test(
       assertEquals(after.rows[0].secrets_rotation.request_id, secondRequestId)
 
       await tx.rollback()
-    } finally {
-      connection.release()
-    }
-  }
+    })
+  },
 )
 
 Deno.test('rotation: advance pending→running→succeeded; succeeded is terminal', async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_rotation_advance')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_rotation_advance')
     await tx.begin()
 
     const reqId = '00000000-0000-0000-0000-0000ccccccccc'.slice(0, 36)
@@ -281,11 +284,13 @@ Deno.test('rotation: advance pending→running→succeeded; succeeded is termina
         INSERT INTO traffic.project_config (project_ref, secrets_rotation)
         VALUES (
           'pcfg_ref_adv',
-          ${JSON.stringify({
-            status: 'pending',
-            request_id: reqId,
-            requested_at: '2099-03-03T00:00:00.000Z',
-          })}::jsonb
+          ${
+      JSON.stringify({
+        status: 'pending',
+        request_id: reqId,
+        requested_at: '2099-03-03T00:00:00.000Z',
+      })
+    }::jsonb
         )
       `
 
@@ -298,8 +303,11 @@ Deno.test('rotation: advance pending→running→succeeded; succeeded is termina
           WHERE project_ref = 'pcfg_ref_adv'
         `
       const cur = result.rows[0].secrets_rotation
-      const next =
-        cur.status === 'pending' ? 'running' : cur.status === 'running' ? 'succeeded' : cur.status
+      const next = cur.status === 'pending'
+        ? 'running'
+        : cur.status === 'running'
+        ? 'succeeded'
+        : cur.status
       if (next !== cur.status) {
         await tx.queryObject`
             UPDATE traffic.project_config
@@ -315,17 +323,14 @@ Deno.test('rotation: advance pending→running→succeeded; succeeded is termina
     assertEquals(await advance(), 'succeeded')
 
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })
 
 // ── Lint exceptions: upsert behaviour ──
 
 Deno.test('lint_exceptions: upsert on (project_ref, lint_name) updates disabled flag', async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_lint_upsert')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_lint_upsert')
     await tx.begin()
 
     await tx.queryObject`
@@ -358,10 +363,12 @@ Deno.test('lint_exceptions: upsert on (project_ref, lint_name) updates disabled 
     assertEquals(result.rows.length, 1)
     assertEquals(result.rows[0].disabled, false)
     assertEquals(result.rows[0].metadata.note, 'second')
-    assertEquals(result.rows[0].count, 1, 'UNIQUE(project_ref, lint_name) prevents duplicates')
+    assertEquals(
+      result.rows[0].count,
+      1,
+      'UNIQUE(project_ref, lint_name) prevents duplicates',
+    )
 
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })

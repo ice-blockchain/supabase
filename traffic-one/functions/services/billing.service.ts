@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import type {
   CustomerResponse,
@@ -205,7 +205,7 @@ export async function updateSubscription(
   orgId: number,
   planId: string,
   planName: string,
-  tier: string
+  tier: string,
 ): Promise<GetSubscriptionResponse> {
   const connection = await pool.connect()
   try {
@@ -242,7 +242,7 @@ export async function updateSubscription(
 export async function previewSubscriptionChange(
   pool: Pool,
   orgId: number,
-  _targetPlan: string
+  _targetPlan: string,
 ): Promise<{ amount_due: number; billing_preview: Record<string, unknown> }> {
   const connection = await pool.connect()
   try {
@@ -279,7 +279,7 @@ export async function listInvoices(
   pool: Pool,
   orgId: number,
   offset = 0,
-  limit = 10
+  limit = 10,
 ): Promise<InvoiceResponse[]> {
   const connection = await pool.connect()
   try {
@@ -310,7 +310,7 @@ export async function countInvoices(pool: Pool, orgId: number): Promise<number> 
 export async function getInvoice(
   pool: Pool,
   orgId: number,
-  invoiceId: string
+  invoiceId: string,
 ): Promise<InvoiceResponse | null> {
   const connection = await pool.connect()
   try {
@@ -366,7 +366,7 @@ export async function getCustomer(pool: Pool, orgId: number): Promise<CustomerRe
 export async function upsertCustomer(
   pool: Pool,
   orgId: number,
-  data: Partial<CustomerResponse>
+  data: Partial<CustomerResponse>,
 ): Promise<CustomerResponse> {
   const connection = await pool.connect()
   try {
@@ -403,7 +403,7 @@ export async function upsertCustomer(
 
 export async function listPaymentMethods(
   pool: Pool,
-  orgId: number
+  orgId: number,
 ): Promise<PaymentMethodResponse[]> {
   const connection = await pool.connect()
   try {
@@ -421,7 +421,7 @@ export async function listPaymentMethods(
 export async function deletePaymentMethod(
   pool: Pool,
   orgId: number,
-  paymentMethodId: string
+  paymentMethodId: string,
 ): Promise<boolean> {
   const connection = await pool.connect()
   try {
@@ -438,7 +438,7 @@ export async function deletePaymentMethod(
 export async function setDefaultPaymentMethod(
   pool: Pool,
   orgId: number,
-  paymentMethodId: string
+  paymentMethodId: string,
 ): Promise<boolean> {
   const connection = await pool.connect()
   try {
@@ -487,7 +487,7 @@ export async function upsertTaxId(
   orgId: number,
   type: string,
   value: string,
-  country: string | null
+  country: string | null,
 ): Promise<TaxIdResponse> {
   const connection = await pool.connect()
   try {
@@ -532,7 +532,7 @@ export async function redeemCredits(
   pool: Pool,
   orgId: number,
   amount: number,
-  description: string
+  description: string,
 ): Promise<{ balance: number }> {
   const connection = await pool.connect()
   try {
@@ -566,7 +566,7 @@ export async function redeemCredits(
 export async function topUpCredits(
   pool: Pool,
   orgId: number,
-  amount: number
+  amount: number,
 ): Promise<{ balance: number }> {
   const connection = await pool.connect()
   try {
@@ -603,7 +603,7 @@ export async function createUpgradeRequest(
   pool: Pool,
   orgId: number,
   requestedPlan: string,
-  note?: string
+  note?: string,
 ): Promise<{ id: number; status: string }> {
   const connection = await pool.connect()
   try {
@@ -651,7 +651,7 @@ export async function applyProjectAddon(
   pool: Pool,
   ref: string,
   addonType: string,
-  addonVariant: string
+  addonVariant: string,
 ): Promise<ProjectAddonsResponse> {
   const connection = await pool.connect()
   try {
@@ -671,7 +671,7 @@ export async function applyProjectAddon(
 export async function removeProjectAddon(
   pool: Pool,
   ref: string,
-  addonVariant: string
+  addonVariant: string,
 ): Promise<boolean> {
   const connection = await pool.connect()
   try {

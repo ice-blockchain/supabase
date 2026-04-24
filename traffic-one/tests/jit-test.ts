@@ -1,20 +1,25 @@
-import { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 import { assert, assertEquals, assertExists } from 'jsr:@std/assert@1'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 import 'jsr:@std/dotenv/load'
 
+import { createDisposableUser, signInAs } from './_helpers/test-user.ts'
+
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!
 const superuserDbUrl = Deno.env.get('SUPERUSER_DB_URL')!
 const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
 })
 
 const V1_PROJECTS_URL = `${supabaseUrl}/api/v1/projects`
 const PROJECTS_URL = `${supabaseUrl}/api/platform/projects`
 const ORG_URL = `${supabaseUrl}/api/platform/organizations`
-const SIGNUP_URL = `${supabaseUrl}/api/platform/signup`
 
 async function getTestSession() {
   const {
@@ -25,7 +30,9 @@ async function getTestSession() {
     password: 'test-password',
   })
   if (error || !session) {
-    throw new Error(`Failed to sign in test user: ${error?.message ?? 'no session'}`)
+    throw new Error(
+      `Failed to sign in test user: ${error?.message ?? 'no session'}`,
+    )
   }
   return session
 }
@@ -35,52 +42,6 @@ function authHeaders(token: string): Record<string, string> {
     Authorization: `Bearer ${token}`,
     'Content-Type': 'application/json',
   }
-}
-
-async function signUpDisposableUser(): Promise<{ email: string; password: string }> {
-  const email = `jit-other-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`
-  const password = 'Test1234!'
-  const res = await fetch(SIGNUP_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email,
-      password,
-      hcaptchaToken: null,
-      redirectTo: 'http://localhost:8000',
-    }),
-  })
-  await res.body?.cancel()
-  assert(res.status === 201 || res.status === 200, `signup failed: ${res.status}`)
-
-  const adminPool = new Pool(superuserDbUrl, 1, true)
-  try {
-    const connection = await adminPool.connect()
-    try {
-      await connection.queryObject`
-        UPDATE auth.users
-        SET email_confirmed_at = COALESCE(email_confirmed_at, now()),
-            confirmed_at = COALESCE(confirmed_at, now())
-        WHERE email = ${email}
-      `
-    } finally {
-      connection.release()
-    }
-  } finally {
-    await adminPool.end()
-  }
-  return { email, password }
-}
-
-async function signInAs(email: string, password: string) {
-  const {
-    data: { session },
-    error,
-  } = await supabase.auth.signInWithPassword({ email, password })
-  if (error || !session) {
-    throw new Error(`sign-in failed for ${email}: ${error?.message ?? 'no session'}`)
-  }
-  return session
 }
 
 // ── Auth ─────────────────────────────────────────────────
@@ -183,7 +144,9 @@ Deno.test('GET /jit-access returns default policy when no row exists', async () 
   assertEquals(typeof body.enabled, 'boolean')
   assertEquals(typeof body.max_session_duration_minutes, 'number')
   assertEquals(typeof body.approval_required, 'boolean')
-  assert(body.default_scope === 'read-only' || body.default_scope === 'read-write')
+  assert(
+    body.default_scope === 'read-only' || body.default_scope === 'read-write',
+  )
 
   // Documented defaults
   assertEquals(body.enabled, true)
@@ -268,7 +231,7 @@ Deno.test('PUT /database/jit issues a grant and returns credentials', async () =
   if (body.status !== undefined) {
     assert(
       body.status === 'active' || body.status === 'pending',
-      `unexpected status: ${body.status}`
+      `unexpected status: ${body.status}`,
     )
   }
 
@@ -289,7 +252,10 @@ Deno.test('GET /database/jit/list includes the new grant', async () => {
   assert(Array.isArray(body))
 
   const match = body.find((g: { username: string }) => g.username === createdUsername)
-  assertExists(match, `Expected grant with username ${createdUsername} to be listed`)
+  assertExists(
+    match,
+    `Expected grant with username ${createdUsername} to be listed`,
+  )
   assertExists(match.user_id)
   assertExists(match.expires_at)
   assertExists(match.granted_at)
@@ -305,19 +271,25 @@ Deno.test('DELETE /database/jit/{user_id} revokes the grant', async () => {
   if (!testRef || !createdUserId) return
   const session = await getTestSession()
 
-  const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/database/jit/${createdUserId}`, {
-    method: 'DELETE',
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/database/jit/${createdUserId}`,
+    {
+      method: 'DELETE',
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 200)
   const body = await res.json()
   assertEquals(body.revoked, true)
   assert(typeof body.count === 'number' && body.count >= 1)
 
   // Subsequent list must not contain the revoked username.
-  const listRes = await fetch(`${V1_PROJECTS_URL}/${testRef}/database/jit/list`, {
-    headers: authHeaders(session.access_token),
-  })
+  const listRes = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/database/jit/list`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(listRes.status, 200)
   const list = await listRes.json()
   const stillThere = list.find((g: { username: string }) => g.username === createdUsername)
@@ -328,10 +300,13 @@ Deno.test('DELETE /database/jit/{user_id} is idempotent on unknown user', async 
   if (!testRef) return
   const session = await getTestSession()
 
-  const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/database/jit/999999999`, {
-    method: 'DELETE',
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/database/jit/999999999`,
+    {
+      method: 'DELETE',
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 200)
   const body = await res.json()
   assertEquals(body.revoked, false)
@@ -342,10 +317,13 @@ Deno.test('DELETE /database/jit/{non-integer} returns 400', async () => {
   if (!testRef) return
   const session = await getTestSession()
 
-  const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/database/jit/not-a-number`, {
-    method: 'DELETE',
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/database/jit/not-a-number`,
+    {
+      method: 'DELETE',
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 400)
   await res.body?.cancel()
 })
@@ -392,7 +370,9 @@ Deno.test(
     // local DB superuser lacks CREATEROLE at runtime. Skip the psql probe
     // gracefully in that case — the route-level behavior is already asserted.
     if (issue.status === 'pending') {
-      console.warn('JIT role is pending (no CREATEROLE privilege?); skipping psql probe')
+      console.warn(
+        'JIT role is pending (no CREATEROLE privilege?); skipping psql probe',
+      )
       return
     }
 
@@ -414,7 +394,7 @@ Deno.test(
         }
         if (!deniedCaughtErr) {
           console.warn(
-            'read-only JIT role was able to CREATE TEMP TABLE — this may indicate a policy gap'
+            'read-only JIT role was able to CREATE TEMP TABLE — this may indicate a policy gap',
           )
         }
       } finally {
@@ -428,7 +408,7 @@ Deno.test(
     if (issue.user_id !== undefined || typeof issue.user_id === 'number') {
       // nothing — /list+delete covers it, and cleanup sweep will drop it
     }
-  }
+  },
 )
 
 // ── Expiry + cleanup tick: expired grant disappears from /list ────────────
@@ -471,34 +451,41 @@ Deno.test('expiry: grants past expires_at are excluded from GET /list', async ()
   }
 
   // GET /list must now exclude the rewound grant.
-  const listRes = await fetch(`${V1_PROJECTS_URL}/${testRef}/database/jit/list`, {
-    headers: authHeaders(session.access_token),
-  })
+  const listRes = await fetch(
+    `${V1_PROJECTS_URL}/${testRef}/database/jit/list`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(listRes.status, 200)
   const list = await listRes.json()
   const stillThere = list.find((g: { username: string }) => g.username === username)
-  assertEquals(stillThere, undefined, `expired grant ${username} must not appear in /list`)
+  assertEquals(
+    stillThere,
+    undefined,
+    `expired grant ${username} must not appear in /list`,
+  )
 })
 
 // ── 403 non-admin (non-member) case ──────────────────────────────────────
 
 Deno.test('GET /v1/projects/{ref}/jit-access from non-member is denied', async () => {
   if (!testRef) return
-  const { email, password } = await signUpDisposableUser()
+  const { email, password } = await createDisposableUser('jit-other')
   const otherSession = await signInAs(email, password)
   const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/jit-access`, {
     headers: authHeaders(otherSession.access_token),
   })
   assert(
     res.status === 404 || res.status === 403,
-    `non-member should be denied (got ${res.status})`
+    `non-member should be denied (got ${res.status})`,
   )
   await res.body?.cancel()
 })
 
 Deno.test('PUT /v1/projects/{ref}/jit-access from non-member is denied', async () => {
   if (!testRef) return
-  const { email, password } = await signUpDisposableUser()
+  const { email, password } = await createDisposableUser('jit-other')
   const otherSession = await signInAs(email, password)
   const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/jit-access`, {
     method: 'PUT',
@@ -507,14 +494,14 @@ Deno.test('PUT /v1/projects/{ref}/jit-access from non-member is denied', async (
   })
   assert(
     res.status === 404 || res.status === 403,
-    `non-member should be denied (got ${res.status})`
+    `non-member should be denied (got ${res.status})`,
   )
   await res.body?.cancel()
 })
 
 Deno.test('PUT /v1/projects/{ref}/database/jit from non-member is denied', async () => {
   if (!testRef) return
-  const { email, password } = await signUpDisposableUser()
+  const { email, password } = await createDisposableUser('jit-other')
   const otherSession = await signInAs(email, password)
   const res = await fetch(`${V1_PROJECTS_URL}/${testRef}/database/jit`, {
     method: 'PUT',
@@ -523,7 +510,7 @@ Deno.test('PUT /v1/projects/{ref}/database/jit from non-member is denied', async
   })
   assert(
     res.status === 404 || res.status === 403,
-    `non-member should be denied (got ${res.status})`
+    `non-member should be denied (got ${res.status})`,
   )
   await res.body?.cancel()
 })

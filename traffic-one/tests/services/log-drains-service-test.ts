@@ -1,16 +1,16 @@
-import { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
 import { assert, assertEquals } from 'jsr:@std/assert@1'
 
 import 'jsr:@std/dotenv/load'
 
-const pool = new Pool(Deno.env.get('TRAFFIC_DB_URL')!, 1, true)
+import { createRetryingPool } from '../_helpers/pool.ts'
+
+const pool = createRetryingPool(Deno.env.get('TRAFFIC_DB_URL')!)
 
 // ── Insert / Select ──────────────────────────────────────
 
 Deno.test('log_drains: insert and select by project_ref', async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_log_drains_insert')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_log_drains_insert')
     await tx.begin()
 
     const inserted = await tx.queryObject<{
@@ -35,7 +35,10 @@ Deno.test('log_drains: insert and select by project_ref', async () => {
     assertEquals(row.type, 'webhook')
     assertEquals(row.active, true)
     assertEquals(row.deleted_at, null)
-    assert(typeof row.token === 'string' && row.token.length > 0, 'token must be a UUID string')
+    assert(
+      typeof row.token === 'string' && row.token.length > 0,
+      'token must be a UUID string',
+    )
 
     const selected = await tx.queryObject<{ count: number }>`
       SELECT COUNT(*)::int AS count FROM traffic.log_drains
@@ -44,9 +47,7 @@ Deno.test('log_drains: insert and select by project_ref', async () => {
     assertEquals(selected.rows[0].count, 1)
 
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })
 
 // ── UNIQUE(project_ref, name) WHERE deleted_at IS NULL ──
@@ -54,9 +55,8 @@ Deno.test('log_drains: insert and select by project_ref', async () => {
 Deno.test(
   'log_drains: UNIQUE (project_ref, name) prevents duplicates among active rows',
   async () => {
-    const connection = await pool.connect()
-    const tx = connection.createTransaction('test_log_drains_unique')
-    try {
+    await pool.withConnection(async (connection) => {
+      const tx = connection.createTransaction('test_log_drains_unique')
       await tx.begin()
 
       await tx.queryObject`
@@ -73,21 +73,21 @@ Deno.test(
       } catch {
         threw = true
       }
-      assert(threw, 'Duplicate (project_ref, name) on active rows should throw')
+      assert(
+        threw,
+        'Duplicate (project_ref, name) on active rows should throw',
+      )
 
       await tx.rollback()
-    } finally {
-      connection.release()
-    }
-  }
+    })
+  },
 )
 
 // ── Same name allowed after soft-delete ──────────────────
 
 Deno.test('log_drains: same name is allowed after soft-delete', async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_log_drains_recreate')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_log_drains_recreate')
     await tx.begin()
 
     const first = await tx.queryObject<{ id: number }>`
@@ -107,20 +107,20 @@ Deno.test('log_drains: same name is allowed after soft-delete', async () => {
       RETURNING id
     `
     assertEquals(second.rows.length, 1)
-    assert(second.rows[0].id !== firstId, 'second insert must create a new row')
+    assert(
+      second.rows[0].id !== firstId,
+      'second insert must create a new row',
+    )
 
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })
 
 // ── Different project_ref with same name is allowed ──────
 
 Deno.test('log_drains: same name allowed across different project_refs', async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_log_drains_cross_ref')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_log_drains_cross_ref')
     await tx.begin()
 
     await tx.queryObject`
@@ -136,17 +136,14 @@ Deno.test('log_drains: same name allowed across different project_refs', async (
     assertEquals(result.rows[0].count, 2)
 
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })
 
 // ── CRUD round-trip via raw SQL (mirrors service ops) ────
 
 Deno.test('log_drains: full CRUD round-trip (list → update → soft-delete)', async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_log_drains_crud')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_log_drains_crud')
     await tx.begin()
 
     const inserted = await tx.queryObject<{ token: string }>`
@@ -171,7 +168,9 @@ Deno.test('log_drains: full CRUD round-trip (list → update → soft-delete)', 
       WHERE project_ref = 'ld_ref_05' AND token = ${token}::uuid AND deleted_at IS NULL
     `
 
-    const afterUpdate = await tx.queryObject<{ name: string; description: string }>`
+    const afterUpdate = await tx.queryObject<
+      { name: string; description: string }
+    >`
       SELECT name, description FROM traffic.log_drains
       WHERE project_ref = 'ld_ref_05' AND token = ${token}::uuid AND deleted_at IS NULL
     `
@@ -197,17 +196,14 @@ Deno.test('log_drains: full CRUD round-trip (list → update → soft-delete)', 
     assertEquals(rawCount.rows[0].count, 1)
 
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })
 
 // ── Defaults ─────────────────────────────────────────────
 
 Deno.test('log_drains: defaults populate description/filters/active', async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_log_drains_defaults')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_log_drains_defaults')
     await tx.begin()
 
     const result = await tx.queryObject<{
@@ -227,7 +223,5 @@ Deno.test('log_drains: defaults populate description/filters/active', async () =
     assertEquals(result.rows[0].config as Record<string, unknown>, {})
 
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })

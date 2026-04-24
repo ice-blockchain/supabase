@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 export type FeedbackCategory = 'general' | 'upgrade_survey' | 'downgrade_survey' | 'support_ticket'
 
@@ -39,7 +39,7 @@ export async function createFeedback(
   profileId: number,
   input: FeedbackCreateInput,
   gotrueId: string,
-  auditContext: FeedbackAuditContext
+  auditContext: FeedbackAuditContext,
 ): Promise<FeedbackRow> {
   const connection = await pool.connect()
   try {
@@ -68,21 +68,25 @@ export async function createFeedback(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, 'profile.feedback_submitted',
-        ${JSON.stringify([
-          {
-            method: auditContext.method,
-            route: auditContext.route,
-            status: 201,
-          },
-        ])}::jsonb,
+        ${
+      JSON.stringify([
+        {
+          method: auditContext.method,
+          route: auditContext.route,
+          status: 201,
+        },
+      ])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'feedback #' + row.id},
-        ${JSON.stringify({
-          category: row.category,
-          project_ref: row.project_ref,
-          organization_slug: row.organization_slug,
-        })}::jsonb,
+        ${
+      JSON.stringify({
+        category: row.category,
+        project_ref: row.project_ref,
+        organization_slug: row.organization_slug,
+      })
+    }::jsonb,
         now()
       )
     `
@@ -103,7 +107,7 @@ export async function updateFeedbackCustomFields(
   profileId: number,
   customFields: Record<string, unknown>,
   gotrueId: string,
-  auditContext: FeedbackAuditContext
+  auditContext: FeedbackAuditContext,
 ): Promise<FeedbackRow | null> {
   const connection = await pool.connect()
   try {
@@ -130,13 +134,15 @@ export async function updateFeedbackCustomFields(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, 'profile.feedback_updated',
-        ${JSON.stringify([
-          {
-            method: auditContext.method,
-            route: auditContext.route,
-            status: 200,
-          },
-        ])}::jsonb,
+        ${
+      JSON.stringify([
+        {
+          method: auditContext.method,
+          route: auditContext.route,
+          status: 200,
+        },
+      ])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'feedback #' + row.id},

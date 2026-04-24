@@ -37,18 +37,23 @@ traffic-one/
       billing.ts               # Billing, payments, customer, tax, addons
       permissions.ts           # GET /permissions
       audit.ts                 # GET /audit, POST /audit-login
+      auth-config.ts           # GET/PATCH /auth/{ref}/config + /config/hooks
+      project-auth-admin.ts    # GoTrue admin proxy (users/invite/magiclink/recover/otp/factors/validate-spam)
+      project-pg-meta.ts       # pg-meta proxy (query + tables/types/policies/extensions/…)
     services/                  # Business logic + DB queries
       profile.service.ts
       access-token.service.ts
       notification.service.ts
       organization.service.ts
       project.service.ts       # Project CRUD, status, transfer, membership enforcement
+      project-backend.service.ts # getProjectBackend(ref) + fetchProjectJson / fetchProjectUrl
       member.service.ts        # Members, invitations, roles, MFA enforcement
       billing.service.ts       # DB queries for billing operations
       stripe.service.ts        # Stripe API wrapper (graceful degradation)
       usage.service.ts         # Usage metrics from Postgres + Logflare
       pricing.config.ts        # Default pricing per plan for all metrics
-      logflare.client.ts       # Logflare SQL endpoint HTTP client
+      logflare.client.ts       # Logflare SQL endpoint HTTP client (per-project aware)
+      gotrue-admin.service.ts  # Backend-scoped GoTrue /admin/settings + /admin/config
       permission.service.ts
       org-settings.service.ts  # MFA enforcement, SSO provider CRUD, org audit logs
       provisioners/
@@ -236,6 +241,50 @@ Health endpoint (separate Kong route at `/api/v1/projects`):
 | `/stripe/setup-intent`                | POST   | Create generic SetupIntent |
 | `/organizations/confirm-subscription` | POST   | Confirm org subscription   |
 
+### Project-scoped GoTrue admin proxy
+
+Served via Kong at `/api/platform/auth/` with `strip_path: false`. The traffic-one dispatcher resolves the per-project GoTrue backend via `getProjectBackend(ref)` and signs every outbound call with that project's `service_role` key — a single Studio can therefore manage users across many independently provisioned project backends.
+
+Config paths (`/config`, `/config/hooks`) stay on the env-merge + override-table flow (see [`routes/auth-config.ts`](functions/routes/auth-config.ts)); everything else dispatches via [`routes/project-auth-admin.ts`](functions/routes/project-auth-admin.ts) to `{backend.endpoint}/auth/v1/admin/*`.
+
+| Path                        | Method | Description                                                        |
+| --------------------------- | ------ | ------------------------------------------------------------------ |
+| `/{ref}/config`             | GET    | Get merged GoTrue config (defaults ← live ← overrides)             |
+| `/{ref}/config`             | PATCH  | Update GoTrue config (live + overrides)                            |
+| `/{ref}/config/hooks`       | GET    | Same shape as `/config`, scoped to webhook fields                  |
+| `/{ref}/config/hooks`       | PATCH  | Same behaviour as `PATCH /config`                                  |
+| `/{ref}/users`              | POST   | Create a user in the project's GoTrue                              |
+| `/{ref}/users/{id}`         | PATCH  | Update a user (email, phone, ban duration, metadata, …)            |
+| `/{ref}/users/{id}`         | DELETE | Delete a user                                                      |
+| `/{ref}/users/{id}/factors` | DELETE | Delete every MFA factor on a user                                  |
+| `/{ref}/invite`             | POST   | Send an admin-invite email                                         |
+| `/{ref}/magiclink`          | POST   | Send a magic-link email                                            |
+| `/{ref}/recover`            | POST   | Send a password-recovery email                                     |
+| `/{ref}/otp`                | POST   | Trigger an OTP flow                                                |
+| `/{ref}/validate/spam`      | POST   | Local heuristic stub (GoTrue has no native validate/spam endpoint) |
+
+Studio's fallback Next.js stubs under `apps/studio/pages/api/platform/auth/[ref]/*` are **unreachable** once this repo's `docker/volumes/api/kong.yml` is mounted — the Kong `platform-auth` route (`strip_path: false`) wins.
+
+### Project-scoped pg-meta proxy
+
+Served via Kong at `/api/platform/pg-meta/` with `strip_path: false`. The traffic-one dispatcher ([`routes/project-pg-meta.ts`](functions/routes/project-pg-meta.ts)) resolves the per-project backend via `getProjectBackend(ref)` and forwards every surface to `{backend.pgMetaUrl}/<surface>` using the project `service_role` key.
+
+| Path                        | Method | Description                                                                                                          |
+| --------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------- |
+| `/{ref}/query`              | POST   | Run an arbitrary SQL query (body: `{ query, disable_statement_timeout? }`). Audit-logged as `project.pg_meta.query`. |
+| `/{ref}/tables`             | GET    | List tables                                                                                                          |
+| `/{ref}/triggers`           | GET    | List triggers                                                                                                        |
+| `/{ref}/types`              | GET    | List user-defined types                                                                                              |
+| `/{ref}/policies`           | GET    | List row-level-security policies                                                                                     |
+| `/{ref}/extensions`         | GET    | List extensions                                                                                                      |
+| `/{ref}/foreign-tables`     | GET    | List foreign tables                                                                                                  |
+| `/{ref}/materialized-views` | GET    | List materialized views                                                                                              |
+| `/{ref}/views`              | GET    | List views                                                                                                           |
+| `/{ref}/column-privileges`  | GET    | List column privileges                                                                                               |
+| `/{ref}/publications`       | GET    | List logical-replication publications                                                                                |
+
+Studio's fallback Next.js stubs under `apps/studio/pages/api/platform/pg-meta/[ref]/*` are **unreachable** once this repo's `docker/volumes/api/kong.yml` is mounted — the Kong `platform-pg-meta` route (`strip_path: false`) wins.
+
 ## Authentication
 
 Most routes require an `Authorization: Bearer <JWT>` header. The function verifies the JWT via `supabase.auth.getUser()` and extracts the user's GoTrue ID for database lookups.
@@ -271,7 +320,37 @@ The `traffic.pricing_overrides` table enables per-organization and per-metric pr
 
 **Default pricing** per plan is in `pricing.config.ts` covering all 44 metrics. Three strategies: `UNIT` (overage × price), `PACKAGE` (ceil(overage/size) × package_price), `NONE` (not billed).
 
+## Known gaps / deliberate stubs
+
+Things traffic-one **does not** do the way hosted Supabase does, but intentionally. Each item links to the route / service that owns it so reviewers know what NOT to file bugs on.
+
+- **`POST /auth/{ref}/validate/spam` is a local heuristic, not a GoTrue call.** GoTrue itself exposes no `validate/spam` admin endpoint. [`routes/project-auth-admin.ts`](functions/routes/project-auth-admin.ts) scores the submitted `{ email, metadata }` pair locally (disposable-email list + structural heuristics) and returns `{ decision: 'allowed' | 'disallowed' }`. It does NOT consult the project's GoTrue, which means toggling anti-spam in the GoTrue config has no effect here and the heuristic is identical across projects. If hosted-parity ever ships an admin-surface endpoint we should switch to proxying it (M4).
+- **`LOGFLARE_PRIVATE_ACCESS_TOKEN` is platform-global even in `api` mode.** The per-project backend resolver returns a Logflare endpoint from env (`LOGFLARE_URL`) but does NOT return a per-project access token — `logflare.client.ts` signs every query with the platform-wide token read from `Deno.env`. Multi-tenant Logflare deployments would need a new secret column (`logflare_access_token_secret_id`) on `traffic.projects` and a resolver change. Tracked as a Phase 6 follow-up in [ARCHITECTURE.md § Env-var fallback](ARCHITECTURE.md#environment-variables) (M9).
+- **Edge-function mutations talk to a very specific HTTP contract.** When the project backend is NOT the shared Docker stack, [`services/edge-functions.service.ts`](functions/services/edge-functions.service.ts) calls `POST {functionsApiUrl}/_deploy`, `PATCH {functionsApiUrl}/_meta/{slug}`, `DELETE {functionsApiUrl}/_meta/{slug}`, and `GET {functionsApiUrl}/_meta[/...]`. The orchestrator that runs remote edge-function runtimes MUST expose that exact surface signed with the project `service_role` key — see [ARCHITECTURE.md § Edge function deploy HTTP contract](ARCHITECTURE.md#edge-function-deploy-http-contract-api-mode) (L2).
+
 ## Testing
+
+### Required `tests/.env`
+
+`tests/.env` is committed with placeholder values; before running anything
+locally fill in the matching credentials from your deployed VM's
+`docker/.env`:
+
+| Var                         | Where to find it                                                                                                               |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `SUPABASE_ANON_KEY`         | `docker/.env` → `ANON_KEY` (must be signed with the same `JWT_SECRET` GoTrue is running with).                                 |
+| `SUPABASE_SERVICE_ROLE_KEY` | `docker/.env` → `SERVICE_ROLE_KEY`. **Required** by the disposable-user helper (admin API calls bypass `GOTRUE_RATE_LIMIT_*`). |
+| `TRAFFIC_DB_URL`            | `docker/.env` → `traffic_api` role DSN (host = `127.0.0.1` when tunnelling, port = Supavisor's 5432).                          |
+| `SUPERUSER_DB_URL`          | `docker/.env` → `postgres` role DSN, same host/port form as above. Used to force-confirm test users + write fixture rows.      |
+| `SUPABASE_PUBLIC_DB_HOST`   | Externally resolvable DB host (defaults to `127.0.0.1` in `tests/.env`). Production leaves this **unset**.                     |
+
+The disposable-user helper (`tests/_helpers/test-user.ts`) calls
+`auth.admin.createUser({ email_confirm: true })` instead of the public
+`/signup` endpoint, so a single suite run no longer eats into the GoTrue
+hourly email-sent quota — but it does require `SUPABASE_SERVICE_ROLE_KEY`
+to be present, otherwise the helper throws on import.
+
+### Running suites
 
 ```bash
 # Always use the function-local Deno config + lock for reproducible resolution.
@@ -316,16 +395,24 @@ $DENO_TEST tests/services/member-service-test.ts
 
 ## Environment Variables
 
-| Variable                        | Description                                                               |
-| ------------------------------- | ------------------------------------------------------------------------- |
-| `TRAFFIC_DB_URL`                | Postgres connection for traffic_api role                                  |
-| `SUPABASE_URL`                  | Supabase URL for JWT verification                                         |
-| `SUPABASE_ANON_KEY`             | Anon key for supabase-js client                                           |
-| `TRAFFIC_API_PASSWORD`          | Password for the traffic_api Postgres role                                |
-| `SUPABASE_SERVICE_ROLE_KEY`     | Service role key (used by local provisioner for project creation)         |
-| `PROJECT_PROVISIONER`           | `local` (default) or `api` — selects project provisioning backend         |
-| `PROVISIONER_API_URL`           | (Required when `PROJECT_PROVISIONER=api`) External orchestration API URL  |
-| `STRIPE_API_KEY`                | (Optional) Stripe secret key; billing works without it in local-only mode |
-| `STRIPE_WEBHOOK_SIGNING_SECRET` | (Optional) Stripe webhook signing secret                                  |
-| `LOGFLARE_URL`                  | Logflare analytics endpoint (default: `http://analytics:4000`)            |
-| `LOGFLARE_PRIVATE_ACCESS_TOKEN` | Private access token for Logflare SQL queries                             |
+See [ARCHITECTURE.md § Environment Variables](ARCHITECTURE.md#environment-variables) for the full list. Short version:
+
+| Variable                                                                                  | Description                                                                                                                                                                                                                            |
+| ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TRAFFIC_DB_URL`                                                                          | Postgres connection for traffic_api role                                                                                                                                                                                               |
+| `SUPABASE_URL`                                                                            | Supabase URL for JWT verification                                                                                                                                                                                                      |
+| `SUPABASE_ANON_KEY`                                                                       | Anon key for supabase-js client                                                                                                                                                                                                        |
+| `TRAFFIC_API_PASSWORD`                                                                    | Password for the traffic_api Postgres role                                                                                                                                                                                             |
+| `SUPABASE_SERVICE_ROLE_KEY`                                                               | Service role key (used by local provisioner for project creation)                                                                                                                                                                      |
+| `PROJECT_PROVISIONER`                                                                     | `local` (default) or `api` — selects project provisioning backend                                                                                                                                                                      |
+| `PROVISIONER_API_URL`                                                                     | (Required when `PROJECT_PROVISIONER=api`) External orchestration API URL                                                                                                                                                               |
+| `STRIPE_API_KEY`                                                                          | (Optional) Stripe secret key; billing works without it in local-only mode                                                                                                                                                              |
+| `STRIPE_WEBHOOK_SIGNING_SECRET`                                                           | (Optional) Stripe webhook signing secret                                                                                                                                                                                               |
+| `LOGFLARE_URL`                                                                            | Logflare analytics endpoint (default: `http://analytics:4000`)                                                                                                                                                                         |
+| `LOGFLARE_PRIVATE_ACCESS_TOKEN`                                                           | Private access token for Logflare SQL queries                                                                                                                                                                                          |
+| `GOTRUE_URL`                                                                              | Shared-stack fallback GoTrue admin URL (ignored when per-project backend resolves)                                                                                                                                                     |
+| `PG_META_URL`                                                                             | Shared-stack fallback pg-meta URL (ignored when per-project backend resolves)                                                                                                                                                          |
+| `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Shared-stack fallbacks used by the project-backend resolver when the provisioner didn't return a DSN                                                                                                                                   |
+| `SUPABASE_PUBLIC_DB_HOST`                                                                 | (Optional) Externally resolvable DB host substituted into JIT `connection_string` results so external clients (psql, future cloud Studio) get a hostname they can reach. Leave unset in production to keep the in-container `db` host. |
+
+Many of the variables above act as **shared-stack-only fallbacks** — when `getProjectBackend(ref)` resolves per-project URLs + credentials from `traffic.projects` / Vault, those values win. See [ARCHITECTURE.md § Project-backend dispatch](ARCHITECTURE.md#project-backend-dispatch) for the full precedence rules.

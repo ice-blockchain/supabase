@@ -1,15 +1,15 @@
-import { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
 import { assert, assertEquals, assertExists, assertNotEquals } from 'jsr:@std/assert@1'
 
 import 'jsr:@std/dotenv/load'
 
+import { createRetryingPool } from '../_helpers/pool.ts'
 import {
   computeKeyAlias,
   hashApiKey,
   verifyApiKey,
 } from '../../functions/services/project-api-keys.service.ts'
 
-const pool = new Pool(Deno.env.get('TRAFFIC_DB_URL')!, 1, true)
+const pool = createRetryingPool(Deno.env.get('TRAFFIC_DB_URL')!)
 
 // ── Hashing ──────────────────────────────────────────────
 
@@ -17,7 +17,11 @@ Deno.test('hashApiKey is deterministic SHA-256 hex (same plaintext → same hash
   const plaintext = 'sb_secret_abcdef0123456789'
   const h1 = await hashApiKey(plaintext)
   const h2 = await hashApiKey(plaintext)
-  assertEquals(h1, h2, 'deterministic hashing: no salt, same input → same hash')
+  assertEquals(
+    h1,
+    h2,
+    'deterministic hashing: no salt, same input → same hash',
+  )
   assertEquals(h1.length, 64, 'SHA-256 hex is 64 chars')
   assert(/^[0-9a-f]+$/.test(h1), 'hash is lowercase hex')
   assertNotEquals(h1, plaintext, 'hash must differ from plaintext')
@@ -33,7 +37,10 @@ Deno.test('verifyApiKey round-trips: matches the stored hash, rejects other inpu
   const plaintext = 'sb_publishable_round_trip_example'
   const hash = await hashApiKey(plaintext)
   assert(await verifyApiKey(plaintext, hash), 'correct plaintext verifies')
-  assert(!(await verifyApiKey('different-plaintext', hash)), 'wrong plaintext must not verify')
+  assert(
+    !(await verifyApiKey('different-plaintext', hash)),
+    'wrong plaintext must not verify',
+  )
 })
 
 // ── Alias ────────────────────────────────────────────────
@@ -54,9 +61,8 @@ Deno.test('computeKeyAlias returns the plaintext unchanged when it is too short'
 Deno.test(
   'project_api_keys: soft-deleted rows (deleted_at IS NOT NULL) excluded from active list',
   async () => {
-    const connection = await pool.connect()
-    const tx = connection.createTransaction('test_api_keys_soft_delete')
-    try {
+    await pool.withConnection(async (connection) => {
+      const tx = connection.createTransaction('test_api_keys_soft_delete')
       await tx.begin()
 
       const ref = `svc_ref_${Math.floor(Math.random() * 1e9)}`
@@ -87,24 +93,25 @@ Deno.test(
       SELECT id FROM traffic.project_api_keys
       WHERE project_ref = ${ref}
     `
-      assertEquals(all.rows.length, 2, 'soft-deleted row is still present at the DB level')
+      assertEquals(
+        all.rows.length,
+        2,
+        'soft-deleted row is still present at the DB level',
+      )
       const ids = all.rows.map((r) => r.id)
       assert(ids.includes(keep.rows[0].id))
       assert(ids.includes(drop.rows[0].id))
 
       await tx.rollback()
-    } finally {
-      connection.release()
-    }
-  }
+    })
+  },
 )
 
 // ── project_api_keys table: hash stored, not plaintext ──
 
 Deno.test('project_api_keys: stored key_hash matches hashApiKey(plaintext)', async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_api_keys_hash_persist')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_api_keys_hash_persist')
     await tx.begin()
 
     const ref = `svc_ref_${Math.floor(Math.random() * 1e9)}`
@@ -118,28 +125,31 @@ Deno.test('project_api_keys: stored key_hash matches hashApiKey(plaintext)', asy
       ) VALUES (${ref}, 'persisted', ${hash}, ${alias}, 'secret')
     `
 
-    const result = await tx.queryObject<{ key_hash: string; key_alias: string }>`
+    const result = await tx.queryObject<
+      { key_hash: string; key_alias: string }
+    >`
       SELECT key_hash, key_alias FROM traffic.project_api_keys
       WHERE project_ref = ${ref}
     `
     assertEquals(result.rows.length, 1)
-    assertNotEquals(result.rows[0].key_hash, plaintext, 'plaintext must never be persisted')
+    assertNotEquals(
+      result.rows[0].key_hash,
+      plaintext,
+      'plaintext must never be persisted',
+    )
     assertEquals(result.rows[0].key_hash, hash)
     assertEquals(result.rows[0].key_alias, alias)
     assert(await verifyApiKey(plaintext, result.rows[0].key_hash))
 
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })
 
 // ── UNIQUE(project_ref, key_hash) ────────────────────────
 
 Deno.test('project_api_keys: UNIQUE(project_ref, key_hash) prevents duplicate hashes', async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_api_keys_unique_hash')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_api_keys_unique_hash')
     await tx.begin()
 
     const ref = `svc_ref_${Math.floor(Math.random() * 1e9)}`
@@ -159,12 +169,13 @@ Deno.test('project_api_keys: UNIQUE(project_ref, key_hash) prevents duplicate ha
     } catch {
       threw = true
     }
-    assert(threw, 'duplicate key_hash for the same project_ref should violate UNIQUE')
+    assert(
+      threw,
+      'duplicate key_hash for the same project_ref should violate UNIQUE',
+    )
 
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })
 
 // ── Active-swap invariant for signing keys ───────────────
@@ -172,9 +183,8 @@ Deno.test('project_api_keys: UNIQUE(project_ref, key_hash) prevents duplicate ha
 Deno.test(
   'project_jwt_signing_keys: marking a new key in_use must demote existing in_use keys',
   async () => {
-    const connection = await pool.connect()
-    const tx = connection.createTransaction('test_signing_swap')
-    try {
+    await pool.withConnection(async (connection) => {
+      const tx = connection.createTransaction('test_signing_swap')
       await tx.begin()
 
       const ref = `svc_ref_${Math.floor(Math.random() * 1e9)}`
@@ -209,17 +219,23 @@ Deno.test(
       const b = result.rows.find((r) => r.id === keyB.rows[0].id)!
       assertExists(a)
       assertExists(b)
-      assertEquals(a.status, 'previously_used', 'previous in_use key must be demoted')
+      assertEquals(
+        a.status,
+        'previously_used',
+        'previous in_use key must be demoted',
+      )
       assertEquals(b.status, 'in_use', 'newly-active key must be in_use')
 
       const inUse = result.rows.filter((r) => r.status === 'in_use')
-      assertEquals(inUse.length, 1, 'exactly one signing key must be in_use per project')
+      assertEquals(
+        inUse.length,
+        1,
+        'exactly one signing key must be in_use per project',
+      )
 
       await tx.rollback()
-    } finally {
-      connection.release()
-    }
-  }
+    })
+  },
 )
 
 // ── Active-swap atomicity ────────────────────────────────
@@ -227,8 +243,7 @@ Deno.test(
 Deno.test(
   'project_jwt_signing_keys: swap rolled back on error leaves previous state intact',
   async () => {
-    const connection = await pool.connect()
-    try {
+    await pool.withConnection(async (connection) => {
       const ref = `svc_ref_${Math.floor(Math.random() * 1e9)}`
 
       // Seed one in_use key outside the aborted transaction so we can observe
@@ -275,15 +290,13 @@ Deno.test(
       assertEquals(
         result.rows[0].status,
         'in_use',
-        'seed row must remain in_use after the aborted swap'
+        'seed row must remain in_use after the aborted swap',
       )
 
       // Clean up (outside any transaction we intentionally rolled back).
       await connection.queryObject`
       DELETE FROM traffic.project_jwt_signing_keys WHERE project_ref = ${ref}
     `
-    } finally {
-      connection.release()
-    }
-  }
+    })
+  },
 )

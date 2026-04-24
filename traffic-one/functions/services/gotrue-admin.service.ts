@@ -1,4 +1,6 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
+
+import { fetchProjectJson, type ProjectBackend } from './project-backend.service.ts'
 
 // ─────────────────────────────────────────────────────────────────────────────
 //
@@ -95,127 +97,127 @@ export function getDefaultConfig(): Record<string, unknown> {
     // Mailer / email
     MAILER_AUTOCONFIRM: envBool(
       'GOTRUE_MAILER_AUTOCONFIRM',
-      envBool('ENABLE_EMAIL_AUTOCONFIRM', false)
+      envBool('ENABLE_EMAIL_AUTOCONFIRM', false),
     ),
     MAILER_ALLOW_UNVERIFIED_EMAIL_SIGN_INS: envBool(
       'GOTRUE_MAILER_ALLOW_UNVERIFIED_EMAIL_SIGN_INS',
-      false
+      false,
     ),
     MAILER_SECURE_EMAIL_CHANGE_ENABLED: envBool('GOTRUE_MAILER_SECURE_EMAIL_CHANGE_ENABLED', true),
     MAILER_OTP_EXP: envNum('GOTRUE_MAILER_OTP_EXP', 3600),
     MAILER_OTP_LENGTH: envNum('GOTRUE_MAILER_OTP_LENGTH', 6),
     MAILER_NOTIFICATIONS_EMAIL_CHANGED_ENABLED: envBool(
       'GOTRUE_MAILER_NOTIFICATIONS_EMAIL_CHANGED_ENABLED',
-      true
+      true,
     ),
     MAILER_NOTIFICATIONS_IDENTITY_LINKED_ENABLED: envBool(
       'GOTRUE_MAILER_NOTIFICATIONS_IDENTITY_LINKED_ENABLED',
-      true
+      true,
     ),
     MAILER_NOTIFICATIONS_IDENTITY_UNLINKED_ENABLED: envBool(
       'GOTRUE_MAILER_NOTIFICATIONS_IDENTITY_UNLINKED_ENABLED',
-      true
+      true,
     ),
     MAILER_NOTIFICATIONS_MFA_FACTOR_ENROLLED_ENABLED: envBool(
       'GOTRUE_MAILER_NOTIFICATIONS_MFA_FACTOR_ENROLLED_ENABLED',
-      true
+      true,
     ),
     MAILER_NOTIFICATIONS_MFA_FACTOR_UNENROLLED_ENABLED: envBool(
       'GOTRUE_MAILER_NOTIFICATIONS_MFA_FACTOR_UNENROLLED_ENABLED',
-      true
+      true,
     ),
     MAILER_NOTIFICATIONS_PASSWORD_CHANGED_ENABLED: envBool(
       'GOTRUE_MAILER_NOTIFICATIONS_PASSWORD_CHANGED_ENABLED',
-      true
+      true,
     ),
     MAILER_NOTIFICATIONS_PHONE_CHANGED_ENABLED: envBool(
       'GOTRUE_MAILER_NOTIFICATIONS_PHONE_CHANGED_ENABLED',
-      true
+      true,
     ),
     MAILER_SUBJECTS_CONFIRMATION: envStr(
       'GOTRUE_MAILER_SUBJECTS_CONFIRMATION',
-      'Confirm your email'
+      'Confirm your email',
     ),
     MAILER_SUBJECTS_EMAIL_CHANGE: envStr(
       'GOTRUE_MAILER_SUBJECTS_EMAIL_CHANGE',
-      'Confirm your email change'
+      'Confirm your email change',
     ),
     MAILER_SUBJECTS_EMAIL_CHANGED_NOTIFICATION: envStr(
       'GOTRUE_MAILER_SUBJECTS_EMAIL_CHANGED_NOTIFICATION',
-      ''
+      '',
     ),
     MAILER_SUBJECTS_IDENTITY_LINKED_NOTIFICATION: envStr(
       'GOTRUE_MAILER_SUBJECTS_IDENTITY_LINKED_NOTIFICATION',
-      ''
+      '',
     ),
     MAILER_SUBJECTS_IDENTITY_UNLINKED_NOTIFICATION: envStr(
       'GOTRUE_MAILER_SUBJECTS_IDENTITY_UNLINKED_NOTIFICATION',
-      ''
+      '',
     ),
     MAILER_SUBJECTS_INVITE: envStr('GOTRUE_MAILER_SUBJECTS_INVITE', 'You have been invited'),
     MAILER_SUBJECTS_MAGIC_LINK: envStr('GOTRUE_MAILER_SUBJECTS_MAGIC_LINK', 'Your Magic Link'),
     MAILER_SUBJECTS_MFA_FACTOR_ENROLLED_NOTIFICATION: envStr(
       'GOTRUE_MAILER_SUBJECTS_MFA_FACTOR_ENROLLED_NOTIFICATION',
-      ''
+      '',
     ),
     MAILER_SUBJECTS_MFA_FACTOR_UNENROLLED_NOTIFICATION: envStr(
       'GOTRUE_MAILER_SUBJECTS_MFA_FACTOR_UNENROLLED_NOTIFICATION',
-      ''
+      '',
     ),
     MAILER_SUBJECTS_PASSWORD_CHANGED_NOTIFICATION: envStr(
       'GOTRUE_MAILER_SUBJECTS_PASSWORD_CHANGED_NOTIFICATION',
-      ''
+      '',
     ),
     MAILER_SUBJECTS_PHONE_CHANGED_NOTIFICATION: envStr(
       'GOTRUE_MAILER_SUBJECTS_PHONE_CHANGED_NOTIFICATION',
-      ''
+      '',
     ),
     MAILER_SUBJECTS_REAUTHENTICATION: envStr(
       'GOTRUE_MAILER_SUBJECTS_REAUTHENTICATION',
-      'Confirm reauthentication'
+      'Confirm reauthentication',
     ),
     MAILER_SUBJECTS_RECOVERY: envStr('GOTRUE_MAILER_SUBJECTS_RECOVERY', 'Reset Your Password'),
     MAILER_TEMPLATES_CONFIRMATION_CONTENT: envStr(
       'GOTRUE_MAILER_TEMPLATES_CONFIRMATION_CONTENT',
-      ''
+      '',
     ),
     MAILER_TEMPLATES_EMAIL_CHANGE_CONTENT: envStr(
       'GOTRUE_MAILER_TEMPLATES_EMAIL_CHANGE_CONTENT',
-      ''
+      '',
     ),
     MAILER_TEMPLATES_EMAIL_CHANGED_NOTIFICATION_CONTENT: envStr(
       'GOTRUE_MAILER_TEMPLATES_EMAIL_CHANGED_NOTIFICATION_CONTENT',
-      ''
+      '',
     ),
     MAILER_TEMPLATES_IDENTITY_LINKED_NOTIFICATION_CONTENT: envStr(
       'GOTRUE_MAILER_TEMPLATES_IDENTITY_LINKED_NOTIFICATION_CONTENT',
-      ''
+      '',
     ),
     MAILER_TEMPLATES_IDENTITY_UNLINKED_NOTIFICATION_CONTENT: envStr(
       'GOTRUE_MAILER_TEMPLATES_IDENTITY_UNLINKED_NOTIFICATION_CONTENT',
-      ''
+      '',
     ),
     MAILER_TEMPLATES_INVITE_CONTENT: envStr('GOTRUE_MAILER_TEMPLATES_INVITE_CONTENT', ''),
     MAILER_TEMPLATES_MAGIC_LINK_CONTENT: envStr('GOTRUE_MAILER_TEMPLATES_MAGIC_LINK_CONTENT', ''),
     MAILER_TEMPLATES_MFA_FACTOR_ENROLLED_NOTIFICATION_CONTENT: envStr(
       'GOTRUE_MAILER_TEMPLATES_MFA_FACTOR_ENROLLED_NOTIFICATION_CONTENT',
-      ''
+      '',
     ),
     MAILER_TEMPLATES_MFA_FACTOR_UNENROLLED_NOTIFICATION_CONTENT: envStr(
       'GOTRUE_MAILER_TEMPLATES_MFA_FACTOR_UNENROLLED_NOTIFICATION_CONTENT',
-      ''
+      '',
     ),
     MAILER_TEMPLATES_PASSWORD_CHANGED_NOTIFICATION_CONTENT: envStr(
       'GOTRUE_MAILER_TEMPLATES_PASSWORD_CHANGED_NOTIFICATION_CONTENT',
-      ''
+      '',
     ),
     MAILER_TEMPLATES_PHONE_CHANGED_NOTIFICATION_CONTENT: envStr(
       'GOTRUE_MAILER_TEMPLATES_PHONE_CHANGED_NOTIFICATION_CONTENT',
-      ''
+      '',
     ),
     MAILER_TEMPLATES_REAUTHENTICATION_CONTENT: envStr(
       'GOTRUE_MAILER_TEMPLATES_REAUTHENTICATION_CONTENT',
-      ''
+      '',
     ),
     MAILER_TEMPLATES_RECOVERY_CONTENT: envStr('GOTRUE_MAILER_TEMPLATES_RECOVERY_CONTENT', ''),
 
@@ -231,15 +233,15 @@ export function getDefaultConfig(): Record<string, unknown> {
     // External providers — enabled flags
     EXTERNAL_EMAIL_ENABLED: envBool(
       'GOTRUE_EXTERNAL_EMAIL_ENABLED',
-      envBool('ENABLE_EMAIL_SIGNUP', true)
+      envBool('ENABLE_EMAIL_SIGNUP', true),
     ),
     EXTERNAL_PHONE_ENABLED: envBool(
       'GOTRUE_EXTERNAL_PHONE_ENABLED',
-      envBool('ENABLE_PHONE_SIGNUP', false)
+      envBool('ENABLE_PHONE_SIGNUP', false),
     ),
     EXTERNAL_ANONYMOUS_USERS_ENABLED: envBool(
       'GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED',
-      envBool('ENABLE_ANONYMOUS_USERS', false)
+      envBool('ENABLE_ANONYMOUS_USERS', false),
     ),
     EXTERNAL_APPLE_ENABLED: envBool('GOTRUE_EXTERNAL_APPLE_ENABLED', false),
     EXTERNAL_APPLE_CLIENT_ID: envStr('GOTRUE_EXTERNAL_APPLE_CLIENT_ID', ''),
@@ -281,7 +283,7 @@ export function getDefaultConfig(): Record<string, unknown> {
     EXTERNAL_GOOGLE_SECRET: envStr('GOTRUE_EXTERNAL_GOOGLE_SECRET', ''),
     EXTERNAL_GOOGLE_ADDITIONAL_CLIENT_IDS: envStr(
       'GOTRUE_EXTERNAL_GOOGLE_ADDITIONAL_CLIENT_IDS',
-      ''
+      '',
     ),
     EXTERNAL_GOOGLE_EMAIL_OPTIONAL: envBool('GOTRUE_EXTERNAL_GOOGLE_EMAIL_OPTIONAL', false),
     EXTERNAL_GOOGLE_SKIP_NONCE_CHECK: envBool('GOTRUE_EXTERNAL_GOOGLE_SKIP_NONCE_CHECK', false),
@@ -299,7 +301,7 @@ export function getDefaultConfig(): Record<string, unknown> {
     EXTERNAL_LINKEDIN_OIDC_SECRET: envStr('GOTRUE_EXTERNAL_LINKEDIN_OIDC_SECRET', ''),
     EXTERNAL_LINKEDIN_OIDC_EMAIL_OPTIONAL: envBool(
       'GOTRUE_EXTERNAL_LINKEDIN_OIDC_EMAIL_OPTIONAL',
-      false
+      false,
     ),
     EXTERNAL_NOTION_ENABLED: envBool('GOTRUE_EXTERNAL_NOTION_ENABLED', false),
     EXTERNAL_NOTION_CLIENT_ID: envStr('GOTRUE_EXTERNAL_NOTION_CLIENT_ID', ''),
@@ -353,24 +355,24 @@ export function getDefaultConfig(): Record<string, unknown> {
     HOOK_CUSTOM_ACCESS_TOKEN_SECRETS: envStr('GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_SECRETS', ''),
     HOOK_MFA_VERIFICATION_ATTEMPT_ENABLED: envBool(
       'GOTRUE_HOOK_MFA_VERIFICATION_ATTEMPT_ENABLED',
-      false
+      false,
     ),
     HOOK_MFA_VERIFICATION_ATTEMPT_URI: envStr('GOTRUE_HOOK_MFA_VERIFICATION_ATTEMPT_URI', ''),
     HOOK_MFA_VERIFICATION_ATTEMPT_SECRETS: envStr(
       'GOTRUE_HOOK_MFA_VERIFICATION_ATTEMPT_SECRETS',
-      ''
+      '',
     ),
     HOOK_PASSWORD_VERIFICATION_ATTEMPT_ENABLED: envBool(
       'GOTRUE_HOOK_PASSWORD_VERIFICATION_ATTEMPT_ENABLED',
-      false
+      false,
     ),
     HOOK_PASSWORD_VERIFICATION_ATTEMPT_URI: envStr(
       'GOTRUE_HOOK_PASSWORD_VERIFICATION_ATTEMPT_URI',
-      ''
+      '',
     ),
     HOOK_PASSWORD_VERIFICATION_ATTEMPT_SECRETS: envStr(
       'GOTRUE_HOOK_PASSWORD_VERIFICATION_ATTEMPT_SECRETS',
-      ''
+      '',
     ),
     HOOK_SEND_EMAIL_ENABLED: envBool('GOTRUE_HOOK_SEND_EMAIL_ENABLED', false),
     HOOK_SEND_EMAIL_URI: envStr('GOTRUE_HOOK_SEND_EMAIL_URI', ''),
@@ -381,7 +383,7 @@ export function getDefaultConfig(): Record<string, unknown> {
 
     INDEX_WORKER_ENSURE_USER_SEARCH_INDEXES_EXIST: envBool(
       'GOTRUE_INDEX_WORKER_ENSURE_USER_SEARCH_INDEXES_EXIST',
-      false
+      false,
     ),
 
     // MFA
@@ -401,7 +403,7 @@ export function getDefaultConfig(): Record<string, unknown> {
     OAUTH_SERVER_ENABLED: envBool('GOTRUE_OAUTH_SERVER_ENABLED', false),
     OAUTH_SERVER_ALLOW_DYNAMIC_REGISTRATION: envBool(
       'GOTRUE_OAUTH_SERVER_ALLOW_DYNAMIC_REGISTRATION',
-      false
+      false,
     ),
     OAUTH_SERVER_AUTHORIZATION_PATH: envStr('GOTRUE_OAUTH_SERVER_AUTHORIZATION_PATH', ''),
 
@@ -434,7 +436,7 @@ export function getDefaultConfig(): Record<string, unknown> {
     SAML_ALLOW_ENCRYPTED_ASSERTIONS: envBool('GOTRUE_SAML_ALLOW_ENCRYPTED_ASSERTIONS', false),
     SAML_EXTERNAL_URL: envStr(
       'GOTRUE_SAML_EXTERNAL_URL',
-      apiExternalUrl ? apiExternalUrl + '/auth/v1/sso/saml/metadata' : ''
+      apiExternalUrl ? apiExternalUrl + '/auth/v1/sso/saml/metadata' : '',
     ),
 
     // Security
@@ -444,16 +446,16 @@ export function getDefaultConfig(): Record<string, unknown> {
     SECURITY_MANUAL_LINKING_ENABLED: envBool('GOTRUE_SECURITY_MANUAL_LINKING_ENABLED', false),
     SECURITY_REFRESH_TOKEN_REUSE_INTERVAL: envNum(
       'GOTRUE_SECURITY_REFRESH_TOKEN_REUSE_INTERVAL',
-      10
+      10,
     ),
     SECURITY_SB_FORWARDED_FOR_ENABLED: envBool('GOTRUE_SECURITY_SB_FORWARDED_FOR_ENABLED', false),
     SECURITY_UPDATE_PASSWORD_REQUIRE_CURRENT_PASSWORD: envBool(
       'GOTRUE_SECURITY_UPDATE_PASSWORD_REQUIRE_CURRENT_PASSWORD',
-      false
+      false,
     ),
     SECURITY_UPDATE_PASSWORD_REQUIRE_REAUTHENTICATION: envBool(
       'GOTRUE_SECURITY_UPDATE_PASSWORD_REQUIRE_REAUTHENTICATION',
-      false
+      false,
     ),
 
     // Sessions
@@ -483,7 +485,7 @@ export function getDefaultConfig(): Record<string, unknown> {
     SMS_TWILIO_VERIFY_AUTH_TOKEN: envStr('GOTRUE_SMS_TWILIO_VERIFY_AUTH_TOKEN', ''),
     SMS_TWILIO_VERIFY_MESSAGE_SERVICE_SID: envStr(
       'GOTRUE_SMS_TWILIO_VERIFY_MESSAGE_SERVICE_SID',
-      ''
+      '',
     ),
     SMS_VONAGE_API_KEY: envStr('GOTRUE_SMS_VONAGE_API_KEY', ''),
     SMS_VONAGE_API_SECRET: envStr('GOTRUE_SMS_VONAGE_API_SECRET', ''),
@@ -495,7 +497,7 @@ export function getDefaultConfig(): Record<string, unknown> {
 
 export async function getOverrides(
   pool: Pool,
-  projectRef: string
+  projectRef: string,
 ): Promise<Record<string, unknown>> {
   const connection = await pool.connect()
   try {
@@ -530,7 +532,7 @@ export async function upsertOverrides(
   overrides: Record<string, unknown>,
   gotrueId: string,
   profileId: number,
-  auditContext?: AuthConfigAuditContext
+  auditContext?: AuthConfigAuditContext,
 ): Promise<void> {
   const keys = Object.keys(overrides)
   if (keys.length === 0) return
@@ -567,7 +569,9 @@ export async function upsertOverrides(
           target_description, target_metadata, occurred_at
         ) VALUES (
           gen_random_uuid(), ${profileId}, 'auth_config.update',
-          ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+          ${
+        JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+      }::jsonb,
           ${gotrueId}, 'user',
           ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
           ${'auth_config ' + projectRef}, ${JSON.stringify({ keys })}::jsonb, now()
@@ -583,10 +587,13 @@ export async function upsertOverrides(
 
 // ── GoTrue admin HTTP proxy ─────────────────────────────────────────────────
 //
-// Real HTTP calls to the GoTrue admin endpoints. GoTrue's `/admin/*` endpoints
-// require a JWT with `role: service_role`, signed with the shared JWT_SECRET
-// (HS256). We build that JWT on-the-fly per call — it's cheap, scoped to the
-// service, and keeps us independent of any long-lived admin token store.
+// Real HTTP calls to the GoTrue admin endpoints for a single project's
+// backend. The URL is derived from `ProjectBackend.endpoint` (so per-project
+// stacks resolve through Kong's auth-v1 rule on their own gateway, and the
+// shared Docker stack routes through `http://kong:8000/auth/v1/...`). The
+// admin JWT is `ProjectBackend.serviceKey` — which is itself a
+// `role: service_role` HS256 JWT signed with the project's JWT_SECRET, so
+// there's no need to sign a fresh token at call-time.
 //
 // Endpoint coverage is pragmatic: this self-hosted GoTrue build does not
 // necessarily expose a live-mutation `POST /admin/config` endpoint. We call
@@ -596,73 +603,40 @@ export async function upsertOverrides(
 // of the env-derived defaults (live wins over env), and any override from the
 // DB wins over live.
 
-function getGotrueUrl(): string {
-  // GOTRUE_URL is the canonical name. Fall back to the compose-internal
-  // hostname so operators don't have to export it explicitly.
-  return (Deno.env.get('GOTRUE_URL') ?? 'http://auth:9999').replace(/\/$/, '')
-}
-
-function base64UrlEncode(input: Uint8Array | string): string {
-  const bytes = typeof input === 'string' ? new TextEncoder().encode(input) : input
-  let s = ''
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i])
-  return btoa(s).replaceAll('=', '').replaceAll('+', '-').replaceAll('/', '_')
-}
-
-// Builds an HS256 JWT with a `service_role` claim, suitable for GoTrue admin
-// calls. Throws if JWT_SECRET is unset — callers should catch and fall back
-// to override-only behavior.
-export async function buildServiceRoleJwt(secret?: string, ttlSeconds = 60): Promise<string> {
-  const jwtSecret = secret ?? Deno.env.get('JWT_SECRET') ?? ''
-  if (jwtSecret.length === 0) {
-    throw new Error('JWT_SECRET is not set; cannot sign service-role JWT')
-  }
-  const header = { alg: 'HS256', typ: 'JWT' }
-  const now = Math.floor(Date.now() / 1000)
-  const payload = {
-    role: 'service_role',
-    iss: 'traffic-one',
-    iat: now,
-    exp: now + ttlSeconds,
-  }
-  const signingInput = `${base64UrlEncode(JSON.stringify(header))}.${base64UrlEncode(
-    JSON.stringify(payload)
-  )}`
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(jwtSecret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  )
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(signingInput))
-  return `${signingInput}.${base64UrlEncode(new Uint8Array(sig))}`
-}
+// L9: `buildServiceRoleJwt` / `base64UrlEncode` were removed from this file.
+//
+// They predated the project-backend refactor and signed an HS256 token from
+// `JWT_SECRET` on demand. Every production caller now receives a signed
+// `service_role` key via `getProjectBackend(ref).serviceKey`, so the only
+// consumers left were the unit tests that covered the helper itself. That
+// circular cover-yourself test was creating a false sense of "JWT plumbing
+// is tested" without exercising any real callsite, so we dropped both the
+// helper and its tests — see `tests/services/gotrue-admin-service-test.ts`.
+// Future callers that need a service-role JWT without a pre-resolved backend
+// should use `jose` (already in the import map) directly rather than
+// re-introducing a bespoke signer here.
 
 // Injectable fetch hook so tests can stub GoTrue without network access.
 export type FetchLike = typeof fetch
 
-// Attempts `GET {GOTRUE_URL}/admin/settings`. Returns the parsed JSON body on
-// 2xx, or `null` if the endpoint is not available (404/501), JWT_SECRET is
-// unset, or the request fails. Non-throwing: callers always get defaults +
-// overrides as the safety net.
+// Attempts `GET {backend.endpoint}/auth/v1/admin/settings`. Returns the parsed
+// JSON body on 2xx, or `null` if the endpoint is not available (404/501) or
+// the request fails. Non-throwing: callers always get defaults + overrides
+// as the safety net.
 export async function fetchLiveSettings(
-  fetchImpl: FetchLike = fetch
+  backend: ProjectBackend,
+  fetchImpl: FetchLike = fetch,
 ): Promise<Record<string, unknown> | null> {
-  let jwt: string
   try {
-    jwt = await buildServiceRoleJwt()
-  } catch {
-    return null
-  }
-  try {
-    const res = await fetchImpl(`${getGotrueUrl()}/admin/settings`, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${jwt}`,
-        Accept: 'application/json',
+    const res = await fetchProjectJson(
+      backend,
+      '/auth/v1/admin/settings',
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
       },
-    })
+      fetchImpl,
+    )
     if (!res.ok) {
       await res.body?.cancel()
       return null
@@ -682,35 +656,32 @@ export interface PushLiveConfigResult {
   rejected: string[]
 }
 
-// Attempts `POST {GOTRUE_URL}/admin/config` with the full patch body. Returns
-// which keys GoTrue accepted (so callers can skip writing them to the override
-// table) and which it rejected (so they still get persisted as overrides).
+// Attempts `POST {backend.endpoint}/auth/v1/admin/config` with the full patch
+// body. Returns which keys GoTrue accepted (so callers can skip writing them
+// to the override table) and which it rejected (so they still get persisted
+// as overrides).
 //
 // A full endpoint failure (404 / network / 5xx) is treated as "nothing
 // accepted" — every key lands in overrides, preserving Wave-1 behavior.
 export async function pushLiveConfig(
+  backend: ProjectBackend,
   patch: Record<string, unknown>,
-  fetchImpl: FetchLike = fetch
+  fetchImpl: FetchLike = fetch,
 ): Promise<PushLiveConfigResult> {
   const keys = Object.keys(patch)
   const noneAccepted: PushLiveConfigResult = { accepted: [], rejected: keys }
 
-  let jwt: string
-  try {
-    jwt = await buildServiceRoleJwt()
-  } catch {
-    return noneAccepted
-  }
   let res: Response
   try {
-    res = await fetchImpl(`${getGotrueUrl()}/admin/config`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${jwt}`,
-        'Content-Type': 'application/json',
+    res = await fetchProjectJson(
+      backend,
+      '/auth/v1/admin/config',
+      {
+        method: 'POST',
+        body: JSON.stringify(patch),
       },
-      body: JSON.stringify(patch),
-    })
+      fetchImpl,
+    )
   } catch {
     return noneAccepted
   }
@@ -740,28 +711,38 @@ export async function pushLiveConfig(
 
 // ── Merged config read ───────────────────────────────────────────────────────
 
-// Returns defaults + live-settings + overrides (earlier wins loser, overrides
-// take final precedence) with secret fields redacted. Never emits the
-// plaintext value of any *_SECRET / *_SECRETS / *_PASS / *_PASSWORD field.
-export async function getMergedConfig(
-  pool: Pool,
-  projectRef: string,
-  fetchImpl: FetchLike = fetch
-): Promise<Record<string, unknown>> {
-  const defaults = getDefaultConfig()
-  const live = await fetchLiveSettings(fetchImpl)
-  const overrides = await getOverrides(pool, projectRef)
+// Internal helper: pure layering of already-fetched inputs. Lives here so
+// `getMergedConfig` and `applyConfigPatch` can share the exact same merge +
+// redaction logic without either one double-fetching the live settings.
+function mergeLayers(
+  defaults: Record<string, unknown>,
+  live: Record<string, unknown> | null,
+  overrides: Record<string, unknown>,
+): Record<string, unknown> {
   const merged: Record<string, unknown> = {
     ...defaults,
     ...(live ?? {}),
     ...overrides,
   }
-
   const redacted: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(merged)) {
     redacted[k] = redactValue(k, v)
   }
   return redacted
+}
+
+// Returns defaults + live-settings + overrides (earlier wins loser, overrides
+// take final precedence) with secret fields redacted. Never emits the
+// plaintext value of any *_SECRET / *_SECRETS / *_PASS / *_PASSWORD field.
+export async function getMergedConfig(
+  pool: Pool,
+  backend: ProjectBackend,
+  fetchImpl: FetchLike = fetch,
+): Promise<Record<string, unknown>> {
+  const defaults = getDefaultConfig()
+  const live = await fetchLiveSettings(backend, fetchImpl)
+  const overrides = await getOverrides(pool, backend.ref)
+  return mergeLayers(defaults, live, overrides)
 }
 
 // ── PATCH: live push + overrides fallback ───────────────────────────────────
@@ -771,19 +752,40 @@ export async function getMergedConfig(
 // GET reflects the live value on the next request). Keys GoTrue rejects, or
 // every key if the live endpoint is unavailable, fall back to overrides —
 // preserving the Wave-1 "Studio sees its own writes" contract.
+//
+// M13: this function now also returns the post-patch merged view. The old
+// shape had `handleAuthConfig` call `applyConfigPatch(...)` and then
+// immediately call `getMergedConfig(...)` — which re-fetched
+// `/auth/v1/admin/settings` for a second time in the same request. We now
+// fetch live settings ONCE, up front, and synthesize the post-push live
+// state by overlaying the patch values that GoTrue accepted. Net change:
+// no more duplicate GET, semantics identical (defaults ≺ live ≺ overrides
+// with secret fields redacted).
 export async function applyConfigPatch(
   pool: Pool,
-  projectRef: string,
+  backend: ProjectBackend,
   patch: Record<string, unknown>,
   gotrueId: string,
   profileId: number,
   auditContext?: AuthConfigAuditContext,
-  fetchImpl: FetchLike = fetch
-): Promise<{ accepted: string[]; overridden: string[] }> {
+  fetchImpl: FetchLike = fetch,
+): Promise<{ accepted: string[]; overridden: string[]; merged: Record<string, unknown> }> {
+  const defaults = getDefaultConfig()
   const keys = Object.keys(patch)
-  if (keys.length === 0) return { accepted: [], overridden: [] }
 
-  const pushResult = await pushLiveConfig(patch, fetchImpl)
+  // Empty patch: nothing to push, nothing to audit. Still return the
+  // current merged view so callers get a consistent response shape.
+  if (keys.length === 0) {
+    const live = await fetchLiveSettings(backend, fetchImpl)
+    const overrides = await getOverrides(pool, backend.ref)
+    return { accepted: [], overridden: [], merged: mergeLayers(defaults, live, overrides) }
+  }
+
+  // Single fetch of the pre-push live state; reused below to compose the
+  // post-push merged view without a second GoTrue round-trip.
+  const prePushLive = await fetchLiveSettings(backend, fetchImpl)
+
+  const pushResult = await pushLiveConfig(backend, patch, fetchImpl)
   const acceptedSet = new Set(pushResult.accepted)
   const overrideBody: Record<string, unknown> = {}
   for (const k of keys) {
@@ -791,7 +793,7 @@ export async function applyConfigPatch(
   }
 
   if (Object.keys(overrideBody).length > 0) {
-    await upsertOverrides(pool, projectRef, overrideBody, gotrueId, profileId, auditContext)
+    await upsertOverrides(pool, backend.ref, overrideBody, gotrueId, profileId, auditContext)
   } else if (auditContext) {
     // Everything went live — still audit the operation.
     const connection = await pool.connect()
@@ -803,16 +805,18 @@ export async function applyConfigPatch(
           target_description, target_metadata, occurred_at
         ) VALUES (
           gen_random_uuid(), ${profileId}, 'auth_config.update',
-          ${JSON.stringify([
-            {
-              method: auditContext.method,
-              route: auditContext.route,
-              status: 200,
-            },
-          ])}::jsonb,
+          ${
+        JSON.stringify([
+          {
+            method: auditContext.method,
+            route: auditContext.route,
+            status: 200,
+          },
+        ])
+      }::jsonb,
           ${gotrueId}, 'user',
           ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
-          ${'auth_config ' + projectRef},
+          ${'auth_config ' + backend.ref},
           ${JSON.stringify({ keys, live: true })}::jsonb,
           now()
         )
@@ -822,8 +826,28 @@ export async function applyConfigPatch(
     }
   }
 
+  // Compose the post-push live state: start with whatever GoTrue returned
+  // before the push (may be null when the admin endpoint is unavailable)
+  // and overlay any keys GoTrue just accepted. For rejected keys the
+  // `overrides` read below will have captured the new value, so leaving
+  // live untouched for them is correct.
+  const postPushLive: Record<string, unknown> | null = prePushLive !== null || acceptedSet.size > 0
+    ? {
+      ...(prePushLive ?? {}),
+      ...Object.fromEntries(
+        [...acceptedSet]
+          .filter((k) => Object.prototype.hasOwnProperty.call(patch, k))
+          .map((k) => [k, patch[k]]),
+      ),
+    }
+    : null
+
+  const overrides = await getOverrides(pool, backend.ref)
+  const merged = mergeLayers(defaults, postPushLive, overrides)
+
   return {
     accepted: [...acceptedSet],
     overridden: Object.keys(overrideBody),
+    merged,
   }
 }

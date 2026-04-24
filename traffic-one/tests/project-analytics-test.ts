@@ -1,4 +1,4 @@
-import { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 import { assert, assertEquals, assertExists } from 'jsr:@std/assert@1'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
@@ -8,13 +8,20 @@ const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!
 const superuserDbUrl = Deno.env.get('SUPERUSER_DB_URL')!
 const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
 })
 
 const PROJECTS_URL = `${supabaseUrl}/api/platform/projects`
 const ORG_URL = `${supabaseUrl}/api/platform/organizations`
 
-async function countAuditRowsByAction(action: string, projectRef: string): Promise<number> {
+async function countAuditRowsByAction(
+  action: string,
+  projectRef: string,
+): Promise<number> {
   const adminPool = new Pool(superuserDbUrl, 1, true)
   try {
     const conn = await adminPool.connect()
@@ -42,7 +49,9 @@ async function getTestSession() {
     password: 'test-password',
   })
   if (error || !session) {
-    throw new Error(`Failed to sign in test user: ${error?.message ?? 'no session'}`)
+    throw new Error(
+      `Failed to sign in test user: ${error?.message ?? 'no session'}`,
+    )
   }
   return session
 }
@@ -65,14 +74,17 @@ Deno.test('GET /projects/{ref}/infra-monitoring returns 401 without auth', async
 Deno.test(
   'POST /projects/{ref}/analytics/endpoints/logs.all returns 401 without auth',
   async () => {
-    const res = await fetch(`${PROJECTS_URL}/some-ref/analytics/endpoints/logs.all`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-    })
+    const res = await fetch(
+      `${PROJECTS_URL}/some-ref/analytics/endpoints/logs.all`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      },
+    )
     assertEquals(res.status, 401)
     await res.body?.cancel()
-  }
+  },
 )
 
 Deno.test('GET /projects/{ref}/analytics/log-drains returns 401 without auth', async () => {
@@ -130,9 +142,12 @@ Deno.test('setup: create test org and project for analytics tests', async () => 
 
 Deno.test('GET /projects/{unknownRef}/infra-monitoring returns 404', async () => {
   const session = await getTestSession()
-  const res = await fetch(`${PROJECTS_URL}/nonexistent00000000/infra-monitoring`, {
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${PROJECTS_URL}/nonexistent00000000/infra-monitoring`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 404)
   await res.body?.cancel()
 })
@@ -144,7 +159,7 @@ Deno.test('GET /projects/{ref}/infra-monitoring returns defined series keys', as
   const session = await getTestSession()
   const res = await fetch(
     `${PROJECTS_URL}/${testRef}/infra-monitoring?attributes=cpu_usage&attributes=ram_usage&startDate=2024-01-01&endDate=2024-01-02&interval=1h`,
-    { headers: authHeaders(session.access_token) }
+    { headers: authHeaders(session.access_token) },
   )
   assertEquals(res.status, 200)
 
@@ -175,7 +190,10 @@ Deno.test('GET /projects/{ref}/infra-monitoring returns defined series keys', as
     const metadata = body.series?.[attribute]
     assertExists(metadata, `metadata for ${attribute} must be defined`)
     const mapped = (
-      body.data as { period_start: string; values?: Record<string, string | undefined> }[]
+      body.data as {
+        period_start: string
+        values?: Record<string, string | undefined>
+      }[]
     ).map((point) => ({
       period_start: point.period_start,
       [attribute]: point.values?.[attribute] ?? 0,
@@ -197,13 +215,13 @@ Deno.test(
         method: 'POST',
         headers: authHeaders(session.access_token),
         body: JSON.stringify({ sql: 'select 1', project: testRef }),
-      }
+      },
     )
     // Must always be 200 — Logflare reachability is not required.
     assertEquals(res.status, 200)
     const body = await res.json()
     assert(Array.isArray(body.result), 'result should be an array')
-  }
+  },
 )
 
 Deno.test(
@@ -213,12 +231,12 @@ Deno.test(
     const session = await getTestSession()
     const res = await fetch(
       `${PROJECTS_URL}/${testRef}/analytics/endpoints/logs.all?project=${testRef}&sql=select 1&iso_timestamp_start=2024-01-01T00:00:00Z&iso_timestamp_end=2024-01-02T00:00:00Z`,
-      { headers: authHeaders(session.access_token) }
+      { headers: authHeaders(session.access_token) },
     )
     assertEquals(res.status, 200)
     const body = await res.json()
     assert(Array.isArray(body.result))
-  }
+  },
 )
 
 // ── /api/rest OpenAPI proxy ──────────────────────────────
@@ -326,39 +344,59 @@ Deno.test('GET /projects/{ref}/analytics/log-drains now lists created drain', as
 Deno.test('PUT /projects/{ref}/analytics/log-drains/{token} updates drain', async () => {
   if (!testRef || !createdDrainToken) return
   const session = await getTestSession()
-  const before = await countAuditRowsByAction('project.log_drain_updated', testRef)
+  const before = await countAuditRowsByAction(
+    'project.log_drain_updated',
+    testRef,
+  )
 
-  const res = await fetch(`${PROJECTS_URL}/${testRef}/analytics/log-drains/${createdDrainToken}`, {
-    method: 'PUT',
-    headers: authHeaders(session.access_token),
-    body: JSON.stringify({
-      name: 'test-drain-1-renamed',
-      description: 'updated',
-      type: 'webhook',
-      config: { url: 'https://example.test/hook-v2' },
-    }),
-  })
+  const res = await fetch(
+    `${PROJECTS_URL}/${testRef}/analytics/log-drains/${createdDrainToken}`,
+    {
+      method: 'PUT',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({
+        name: 'test-drain-1-renamed',
+        description: 'updated',
+        type: 'webhook',
+        config: { url: 'https://example.test/hook-v2' },
+      }),
+    },
+  )
   assertEquals(res.status, 200)
   const body = await res.json()
   assertEquals(body.name, 'test-drain-1-renamed')
   assertEquals(body.description, 'updated')
 
-  const after = await countAuditRowsByAction('project.log_drain_updated', testRef)
-  assertEquals(after - before, 1, 'PUT must emit one project.log_drain_updated audit row')
+  const after = await countAuditRowsByAction(
+    'project.log_drain_updated',
+    testRef,
+  )
+  assertEquals(
+    after - before,
+    1,
+    'PUT must emit one project.log_drain_updated audit row',
+  )
 })
 
 Deno.test('DELETE /projects/{ref}/analytics/log-drains/{token} soft-deletes drain', async () => {
   if (!testRef || !createdDrainToken) return
   const session = await getTestSession()
-  const res = await fetch(`${PROJECTS_URL}/${testRef}/analytics/log-drains/${createdDrainToken}`, {
-    method: 'DELETE',
-    headers: authHeaders(session.access_token),
-  })
+  const res = await fetch(
+    `${PROJECTS_URL}/${testRef}/analytics/log-drains/${createdDrainToken}`,
+    {
+      method: 'DELETE',
+      headers: authHeaders(session.access_token),
+    },
+  )
   assertEquals(res.status, 200)
+  await res.body?.cancel()
 
-  const listRes = await fetch(`${PROJECTS_URL}/${testRef}/analytics/log-drains`, {
-    headers: authHeaders(session.access_token),
-  })
+  const listRes = await fetch(
+    `${PROJECTS_URL}/${testRef}/analytics/log-drains`,
+    {
+      headers: authHeaders(session.access_token),
+    },
+  )
   const body = await listRes.json()
   assertEquals(body.length, 0, 'soft-deleted drain should not appear in list')
 })
@@ -368,7 +406,7 @@ Deno.test('GET /projects/{ref}/analytics/log-drains/{unknownToken} returns 404',
   const session = await getTestSession()
   const res = await fetch(
     `${PROJECTS_URL}/${testRef}/analytics/log-drains/00000000-0000-0000-0000-000000000000`,
-    { headers: authHeaders(session.access_token) }
+    { headers: authHeaders(session.access_token) },
   )
   assertEquals(res.status, 404)
   await res.body?.cancel()

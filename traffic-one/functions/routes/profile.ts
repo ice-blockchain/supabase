@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import { getOrCreateProfile, updateProfile } from '../services/profile.service.ts'
@@ -10,7 +10,7 @@ export async function handleProfile(
   method: string,
   pool: Pool,
   gotrueId: string,
-  email: string
+  email: string,
 ): Promise<Response> {
   if (method === 'GET' && (path === '/' || path === '')) {
     const profile = await getOrCreateProfile(pool, gotrueId, email)
@@ -51,6 +51,6 @@ export async function handleProfile(
     {
       status: 405,
       headers: corsHeaders,
-    }
+    },
   )
 }

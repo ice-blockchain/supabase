@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 export type BranchStatus = 'created' | 'pushing' | 'pushed' | 'merged' | 'revoked'
 
@@ -120,7 +120,7 @@ export async function createBranch(
   input: BranchCreateInput,
   gotrueId: string,
   organizationId: number,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<CreateBranchOutcome> {
   const branchName = input.branchName?.trim()
   if (!branchName) {
@@ -168,7 +168,9 @@ export async function createBranch(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, 'project.branch_created',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'branches #' + row.id + ' (ref: ' + projectRef + ', name: ' + row.branch_name + ')'},
@@ -193,7 +195,7 @@ export async function updateBranch(
   profileId: number,
   gotrueId: string,
   organizationId: number,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<UpdateBranchOutcome> {
   const touchedKeys = Object.entries(patch)
     .filter(([, v]) => v !== undefined)
@@ -219,12 +221,12 @@ export async function updateBranch(
       return { status: 'conflict', message: 'branch_name cannot be empty' }
     }
     const nextIsDefault = patch.isDefault !== undefined ? patch.isDefault : current.is_default
-    const nextGitBranch =
-      patch.gitBranch !== undefined ? (patch.gitBranch ?? null) : current.git_branch
-    const nextParentRef =
-      patch.parentProjectRef !== undefined
-        ? (patch.parentProjectRef ?? null)
-        : current.parent_project_ref
+    const nextGitBranch = patch.gitBranch !== undefined
+      ? (patch.gitBranch ?? null)
+      : current.git_branch
+    const nextParentRef = patch.parentProjectRef !== undefined
+      ? (patch.parentProjectRef ?? null)
+      : current.parent_project_ref
     const nextPrNumber = patch.prNumber !== undefined ? (patch.prNumber ?? null) : current.pr_number
 
     let updated: BranchRow
@@ -263,10 +265,15 @@ export async function updateBranch(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, 'project.branch_updated',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
-        ${'branches #' + updated.id + ' (ref: ' + updated.project_ref + ', name: ' + updated.branch_name + ')'},
+        ${
+      'branches #' + updated.id + ' (ref: ' + updated.project_ref + ', name: ' +
+      updated.branch_name + ')'
+    },
         ${JSON.stringify({ branch_name: updated.branch_name, keys: touchedKeys })}::jsonb,
         now()
       )
@@ -287,7 +294,7 @@ export async function softDeleteBranch(
   profileId: number,
   gotrueId: string,
   organizationId: number,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<BranchRow | null> {
   const connection = await pool.connect()
   try {
@@ -313,7 +320,9 @@ export async function softDeleteBranch(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, 'project.branch_deleted',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'branches #' + row.id + ' (ref: ' + row.project_ref + ', name: ' + row.branch_name + ')'},
@@ -337,7 +346,7 @@ export async function restoreBranch(
   profileId: number,
   gotrueId: string,
   organizationId: number,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<BranchRow | null> {
   const connection = await pool.connect()
   try {
@@ -363,7 +372,9 @@ export async function restoreBranch(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, 'project.branch_restored',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'branches #' + row.id + ' (ref: ' + row.project_ref + ', name: ' + row.branch_name + ')'},
@@ -408,7 +419,7 @@ export async function pushBranch(
   profileId: number,
   gotrueId: string,
   organizationId: number,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<TransitionOutcome> {
   const connection = await pool.connect()
   try {
@@ -458,7 +469,9 @@ export async function pushBranch(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, 'project.branch_pushed',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'branches #' + row.id + ' (ref: ' + row.project_ref + ', name: ' + row.branch_name + ')'},
@@ -480,7 +493,7 @@ export async function mergeBranch(
   profileId: number,
   gotrueId: string,
   organizationId: number,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<TransitionOutcome> {
   const connection = await pool.connect()
   try {
@@ -521,7 +534,9 @@ export async function mergeBranch(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, 'project.branch_merged',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'branches #' + row.id + ' (ref: ' + row.project_ref + ', name: ' + row.branch_name + ')'},
@@ -543,7 +558,7 @@ export async function resetBranch(
   profileId: number,
   gotrueId: string,
   organizationId: number,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<TransitionOutcome> {
   const connection = await pool.connect()
   try {
@@ -587,7 +602,9 @@ export async function resetBranch(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${organizationId}, 'project.branch_reset',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'branches #' + row.id + ' (ref: ' + row.project_ref + ', name: ' + row.branch_name + ')'},

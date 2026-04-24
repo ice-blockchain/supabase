@@ -1,5 +1,22 @@
-const LOGFLARE_URL = Deno.env.get('LOGFLARE_URL') ?? 'http://analytics:4000'
-const LOGFLARE_KEY = Deno.env.get('LOGFLARE_PRIVATE_ACCESS_TOKEN') ?? ''
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Thin HTTP client for a project's Logflare analytics endpoint. Callers pass
+// a `LogflareBackend` (a structural subset of `ProjectBackend`) so the same
+// client can target either the shared Docker Logflare in local mode or a
+// per-project analytics stack in api mode — the resolver in
+// `project-backend.service.ts` picks which one based on
+// `traffic.projects.endpoint`.
+//
+// On any transport / parse error or non-2xx status the returned `result` is
+// an empty array so callers can surface `{ result: [] }` to the UI without
+// propagating a 5xx.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface LogflareBackend {
+  logflareUrl: string
+  logflareToken: string
+}
 
 export interface LogflareEndpointResult {
   status: number
@@ -7,22 +24,20 @@ export interface LogflareEndpointResult {
   raw: unknown
 }
 
-/**
- * Low-level helper that proxies a Logflare endpoint query.
- *
- * On any transport/parse error or non-2xx status the returned `result` is an
- * empty array so callers can surface `{ result: [] }` to the UI without
- * propagating a 5xx.
- */
 export async function queryEndpoint(
+  backend: LogflareBackend,
   name: string,
   params: Record<string, string | undefined>,
   body?: unknown,
-  method: 'GET' | 'POST' = 'GET'
+  method: 'GET' | 'POST' = 'GET',
 ): Promise<LogflareEndpointResult> {
+  if (!backend.logflareUrl) {
+    return { status: 0, result: [], raw: null }
+  }
+
   let url: URL
   try {
-    url = new URL(`${LOGFLARE_URL}/api/endpoints/query/${name}`)
+    url = new URL(`${backend.logflareUrl.replace(/\/$/, '')}/api/endpoints/query/${name}`)
   } catch (err) {
     console.error('Logflare URL construction failed:', err)
     return { status: 0, result: [], raw: null }
@@ -38,7 +53,7 @@ export async function queryEndpoint(
     const init: RequestInit = {
       method,
       headers: {
-        'x-api-key': LOGFLARE_KEY,
+        'x-api-key': backend.logflareToken,
         'Content-Type': 'application/json',
       },
     }
@@ -70,13 +85,14 @@ export async function queryEndpoint(
 }
 
 export async function queryLogflare(
+  backend: LogflareBackend,
   sql: string,
   isoStart: string,
   isoEnd: string,
-  projectRef = 'default'
+  sourceName = 'default',
 ): Promise<Record<string, unknown>[]> {
-  const { result } = await queryEndpoint('logs.all', {
-    project: projectRef,
+  const { result } = await queryEndpoint(backend, 'logs.all', {
+    project: sourceName,
     sql,
     iso_timestamp_start: isoStart,
     iso_timestamp_end: isoEnd,

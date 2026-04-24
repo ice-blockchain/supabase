@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import type { AuditLog, AuditLogsResponse } from '../types/api.ts'
@@ -45,7 +45,7 @@ export async function handleAudit(
   pool: Pool,
   gotrueId: string,
   email: string,
-  profileId: number
+  profileId: number,
 ): Promise<Response> {
   if (method === 'GET' && path === '/audit') {
     const url = new URL(req.url)
@@ -55,7 +55,7 @@ export async function handleAudit(
     if (!startTs || !endTs) {
       return Response.json(
         { message: 'iso_timestamp_start and iso_timestamp_end are required' },
-        { status: 400, headers: corsHeaders }
+        { status: 400, headers: corsHeaders },
       )
     }
 
@@ -98,7 +98,7 @@ export async function handleAudit(
       `
       return Response.json(
         { message: 'Login event recorded' },
-        { status: 201, headers: corsHeaders }
+        { status: 201, headers: corsHeaders },
       )
     } finally {
       connection.release()
@@ -110,6 +110,6 @@ export async function handleAudit(
     {
       status: 405,
       headers: corsHeaders,
-    }
+    },
   )
 }

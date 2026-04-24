@@ -1,9 +1,11 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import {
+  type ApiKeyType,
   createApiKey,
   createSigningKey,
+  type CreateSigningKeyInput,
   createTemporaryApiKey,
   deleteApiKey,
   deleteSigningKey,
@@ -13,14 +15,18 @@ import {
   listLegacyApiKeys,
   listLegacySigningKeys,
   listSigningKeys,
+  type SigningKeyStatus,
   updateApiKey,
   updateSigningKey,
-  type ApiKeyType,
-  type CreateSigningKeyInput,
-  type SigningKeyStatus,
 } from '../services/project-api-keys.service.ts'
+import {
+  getProjectBackend,
+  ProjectBackendNotProvisionedError,
+} from '../services/project-backend.service.ts'
 import { getProjectByRef } from '../services/project.service.ts'
 import { getClientIp } from '../utils/client-ip.ts'
+import { notProvisionedResponse } from '../utils/project-backend-response.ts'
+import { assertValidRef } from '../utils/ref-validation.ts'
 
 // ── Response helpers ─────────────────────────────────────────
 
@@ -39,7 +45,7 @@ function badRequestResponse(message: string): Response {
 function notSupportedResponse(message: string): Response {
   return Response.json(
     { code: 'self_hosted_unsupported', message },
-    { status: 501, headers: corsHeaders }
+    { status: 501, headers: corsHeaders },
   )
 }
 
@@ -78,13 +84,17 @@ export async function handleProjectApiKeys(
   pool: Pool,
   profileId: number,
   gotrueId: string,
-  email: string
+  email: string,
 ): Promise<Response> {
   const refMatch = path.match(/^\/([^/]+)(\/.*)?$/)
   if (!refMatch) return notFoundResponse()
 
   const ref = refMatch[1]
   const subPath = refMatch[2] || ''
+
+  // L4: reject malformed refs before hitting the DB.
+  const bad = assertValidRef(ref)
+  if (bad) return bad
 
   const project = await getProjectByRef(pool, ref, profileId)
   if (!project) return notFoundResponse('Project not found')
@@ -96,11 +106,19 @@ export async function handleProjectApiKeys(
   // ── /api-keys/legacy ─────────────────────────────────────
   if (subPath === '/api-keys/legacy' || subPath === '/api-keys/legacy/') {
     if (method === 'GET') {
-      return Response.json(listLegacyApiKeys(), { headers: corsHeaders })
+      try {
+        const backend = await getProjectBackend(ref, pool)
+        return Response.json(listLegacyApiKeys(backend), { headers: corsHeaders })
+      } catch (err) {
+        if (err instanceof ProjectBackendNotProvisionedError) {
+          return notProvisionedResponse(err)
+        }
+        throw err
+      }
     }
     if (method === 'PUT') {
       return notSupportedResponse(
-        'Rotating the legacy anon / service_role keys requires restarting the stack with new env vars'
+        'Rotating the legacy anon / service_role keys requires restarting the stack with new env vars',
       )
     }
     return methodNotAllowedResponse()
@@ -111,12 +129,11 @@ export async function handleProjectApiKeys(
     if (method === 'POST') {
       const body = await readJson(req)
       const name = typeof body.name === 'string' ? body.name : undefined
-      const ttl =
-        typeof body.ttl_seconds === 'number'
-          ? body.ttl_seconds
-          : typeof body.ttlSeconds === 'number'
-            ? body.ttlSeconds
-            : undefined
+      const ttl = typeof body.ttl_seconds === 'number'
+        ? body.ttl_seconds
+        : typeof body.ttlSeconds === 'number'
+        ? body.ttlSeconds
+        : undefined
       const response = await createTemporaryApiKey(
         pool,
         ref,
@@ -124,7 +141,7 @@ export async function handleProjectApiKeys(
         organizationId,
         { name, ttl_seconds: ttl },
         gotrueId,
-        auditContext
+        auditContext,
       )
       return Response.json(response, { status: 201, headers: corsHeaders })
     }
@@ -157,7 +174,7 @@ export async function handleProjectApiKeys(
         organizationId,
         { name: body.name, description, type: body.type, tags },
         gotrueId,
-        auditContext
+        auditContext,
       )
       return Response.json(created, { status: 201, headers: corsHeaders })
     }
@@ -191,7 +208,7 @@ export async function handleProjectApiKeys(
         profileId,
         organizationId,
         gotrueId,
-        auditContext
+        auditContext,
       )
       if (!updated) return notFoundResponse('Api key not found')
       return Response.json(updated, { headers: corsHeaders })
@@ -204,7 +221,7 @@ export async function handleProjectApiKeys(
         profileId,
         organizationId,
         gotrueId,
-        auditContext
+        auditContext,
       )
       if (!deleted) return notFoundResponse('Api key not found')
       return Response.json(deleted, { headers: corsHeaders })
@@ -222,7 +239,7 @@ export async function handleProjectApiKeys(
     }
     if (method === 'POST') {
       return notSupportedResponse(
-        'Rotating the legacy HS256 signing secret requires restarting GoTrue with new env vars'
+        'Rotating the legacy HS256 signing secret requires restarting GoTrue with new env vars',
       )
     }
     return methodNotAllowedResponse()
@@ -241,19 +258,19 @@ export async function handleProjectApiKeys(
       }
       if (body.status !== undefined && !isSigningKeyStatus(body.status)) {
         return badRequestResponse(
-          "status must be one of 'in_use', 'standby', 'previously_used', 'revoked'"
+          "status must be one of 'in_use', 'standby', 'previously_used', 'revoked'",
         )
       }
       const input: CreateSigningKeyInput = {
         algorithm: body.algorithm,
         status: isSigningKeyStatus(body.status) ? body.status : undefined,
         active: typeof body.active === 'boolean' ? body.active : undefined,
-        public_jwk:
-          body.public_jwk && typeof body.public_jwk === 'object'
-            ? (body.public_jwk as Record<string, unknown>)
-            : undefined,
-        private_jwk_secret_id:
-          typeof body.private_jwk_secret_id === 'string' ? body.private_jwk_secret_id : null,
+        public_jwk: body.public_jwk && typeof body.public_jwk === 'object'
+          ? (body.public_jwk as Record<string, unknown>)
+          : undefined,
+        private_jwk_secret_id: typeof body.private_jwk_secret_id === 'string'
+          ? body.private_jwk_secret_id
+          : null,
       }
       const created = await createSigningKey(
         pool,
@@ -262,7 +279,7 @@ export async function handleProjectApiKeys(
         organizationId,
         input,
         gotrueId,
-        auditContext
+        auditContext,
       )
       return Response.json(created, { status: 201, headers: corsHeaders })
     }
@@ -284,7 +301,7 @@ export async function handleProjectApiKeys(
       const body = await readJson(req)
       if (body.status !== undefined && !isSigningKeyStatus(body.status)) {
         return badRequestResponse(
-          "status must be one of 'in_use', 'standby', 'previously_used', 'revoked'"
+          "status must be one of 'in_use', 'standby', 'previously_used', 'revoked'",
         )
       }
       const patch: {
@@ -307,7 +324,7 @@ export async function handleProjectApiKeys(
         organizationId,
         patch,
         gotrueId,
-        auditContext
+        auditContext,
       )
       if (!updated) return notFoundResponse('Signing key not found')
       return Response.json(updated, { headers: corsHeaders })
@@ -320,7 +337,7 @@ export async function handleProjectApiKeys(
         profileId,
         organizationId,
         gotrueId,
-        auditContext
+        auditContext,
       )
       if (!deleted) return notFoundResponse('Signing key not found')
       return Response.json(deleted, { headers: corsHeaders })

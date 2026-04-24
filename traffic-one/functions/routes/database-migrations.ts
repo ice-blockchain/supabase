@@ -1,9 +1,10 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import { corsHeaders } from '../index.ts'
 import { getProjectByRef } from '../services/project.service.ts'
 import { insertMigration, listMigrations } from '../services/schema-migrations.service.ts'
 import { getClientIp } from '../utils/client-ip.ts'
+import { assertValidRef } from '../utils/ref-validation.ts'
 
 function notFoundResponse(message = 'Not Found'): Response {
   return Response.json({ message }, { status: 404, headers: corsHeaders })
@@ -39,13 +40,17 @@ export async function handleDatabaseMigrations(
   pool: Pool,
   profileId: number,
   gotrueId: string,
-  email: string
+  email: string,
 ): Promise<Response> {
   const match = path.match(/^\/([^/]+)\/database\/migrations\/?$/)
   if (!match) {
     return notFoundResponse()
   }
   const ref = match[1]
+
+  // L4: malformed ref → 400 before DB lookup.
+  const bad = assertValidRef(ref)
+  if (bad) return bad
 
   const project = await getProjectByRef(pool, ref, profileId)
   if (!project) {
@@ -91,7 +96,7 @@ export async function handleDatabaseMigrations(
       profileId,
       project.organization_id,
       gotrueId,
-      auditContext
+      auditContext,
     )
 
     if (outcome.status === 'conflict') {
@@ -101,7 +106,7 @@ export async function handleDatabaseMigrations(
           message: 'Migration version already exists',
           migration: outcome.migration,
         },
-        { status: 409, headers: corsHeaders }
+        { status: 409, headers: corsHeaders },
       )
     }
 

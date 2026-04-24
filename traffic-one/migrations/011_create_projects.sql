@@ -26,7 +26,10 @@ CREATE EXTENSION IF NOT EXISTS supabase_vault WITH SCHEMA vault;
 GRANT USAGE ON SCHEMA vault TO traffic_api;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA vault TO traffic_api;
 GRANT SELECT ON vault.decrypted_secrets TO traffic_api;
-GRANT DELETE ON vault.secrets TO traffic_api;
+-- DELETE FROM vault.secrets WHERE id = ... needs SELECT to evaluate the
+-- WHERE clause row-by-row; without it Postgres fails "permission denied
+-- for table secrets" at plan time regardless of the DELETE grant.
+GRANT SELECT, DELETE ON vault.secrets TO traffic_api;
 
 GRANT USAGE ON SCHEMA storage TO traffic_api;
 GRANT SELECT ON storage.objects TO traffic_api;

@@ -1,4 +1,4 @@
-import { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 import { assert, assertEquals, assertExists } from 'jsr:@std/assert@1'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
@@ -9,7 +9,11 @@ const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!
 const trafficDbUrl = Deno.env.get('TRAFFIC_DB_URL')!
 
 const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
 })
 
 const pool = new Pool(trafficDbUrl, 1, true)
@@ -25,7 +29,9 @@ async function getTestSession() {
     password: 'test-password',
   })
   if (error || !session) {
-    throw new Error(`Failed to sign in test user: ${error?.message ?? 'no session'}`)
+    throw new Error(
+      `Failed to sign in test user: ${error?.message ?? 'no session'}`,
+    )
   }
   return session
 }
@@ -164,7 +170,10 @@ Deno.test('POST /feedback/send persists general feedback', async () => {
   assertEquals(row!.project_ref, 'test-ref')
   assert(Array.isArray(row!.tags))
   assert(row!.tags.includes('dashboard-feedback'))
-  assertEquals((row!.metadata as { pathname?: string }).pathname, '/project/test-ref')
+  assertEquals(
+    (row!.metadata as { pathname?: string }).pathname,
+    '/project/test-ref',
+  )
 })
 
 Deno.test('POST /feedback/upgrade persists with category=upgrade_survey', async () => {
@@ -191,7 +200,11 @@ Deno.test('POST /feedback/upgrade persists with category=upgrade_survey', async 
   assertEquals(row!.category, 'upgrade_survey')
   assertEquals(row!.message, uniqueMessage)
   assertEquals(row!.organization_slug, 'test-org')
-  const metadata = row!.metadata as { reasons?: string[]; prevPlan?: string; currentPlan?: string }
+  const metadata = row!.metadata as {
+    reasons?: string[]
+    prevPlan?: string
+    currentPlan?: string
+  }
   assertEquals(metadata.prevPlan, 'free')
   assertEquals(metadata.currentPlan, 'pro')
   assert(Array.isArray(metadata.reasons))
@@ -231,29 +244,35 @@ Deno.test(
   'PATCH /feedback/conversations/:id/custom-fields returns 404 for unknown id',
   async () => {
     const session = await getTestSession()
-    const res = await fetch(`${FEEDBACK_URL}/conversations/99999999/custom-fields`, {
-      method: 'PATCH',
-      headers: authHeaders(session.access_token),
-      body: JSON.stringify({ org_id: 1, category: 'Billing' }),
-    })
+    const res = await fetch(
+      `${FEEDBACK_URL}/conversations/99999999/custom-fields`,
+      {
+        method: 'PATCH',
+        headers: authHeaders(session.access_token),
+        body: JSON.stringify({ org_id: 1, category: 'Billing' }),
+      },
+    )
     assertEquals(res.status, 404)
     const body = await res.json()
     assertExists(body.message)
-  }
+  },
 )
 
 Deno.test(
   'PATCH /feedback/conversations/:id/custom-fields returns 404 for non-numeric id',
   async () => {
     const session = await getTestSession()
-    const res = await fetch(`${FEEDBACK_URL}/conversations/abc-conversation/custom-fields`, {
-      method: 'PATCH',
-      headers: authHeaders(session.access_token),
-      body: JSON.stringify({ org_id: 1 }),
-    })
+    const res = await fetch(
+      `${FEEDBACK_URL}/conversations/abc-conversation/custom-fields`,
+      {
+        method: 'PATCH',
+        headers: authHeaders(session.access_token),
+        body: JSON.stringify({ org_id: 1 }),
+      },
+    )
     assertEquals(res.status, 404)
     await res.body?.cancel()
-  }
+  },
 )
 
 Deno.test('PATCH /feedback/conversations/:id/custom-fields merges onto existing row', async () => {
@@ -269,16 +288,19 @@ Deno.test('PATCH /feedback/conversations/:id/custom-fields merges onto existing 
   const created = await createRes.json()
   const id: number = created.id
 
-  const patchRes = await fetch(`${FEEDBACK_URL}/conversations/${id}/custom-fields`, {
-    method: 'PATCH',
-    headers: authHeaders(session.access_token),
-    body: JSON.stringify({
-      org_id: 42,
-      project_ref: 'patched-ref',
-      category: 'Billing',
-      allow_support_access: true,
-    }),
-  })
+  const patchRes = await fetch(
+    `${FEEDBACK_URL}/conversations/${id}/custom-fields`,
+    {
+      method: 'PATCH',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({
+        org_id: 42,
+        project_ref: 'patched-ref',
+        category: 'Billing',
+        allow_support_access: true,
+      }),
+    },
+  )
   assertEquals(patchRes.status, 200)
   const patched = await patchRes.json()
   assertEquals(patched.id, id)
@@ -297,11 +319,14 @@ Deno.test('PATCH /feedback/conversations/:id/custom-fields merges onto existing 
   assertEquals(cf.allow_support_access, true)
 
   // Subsequent PATCH merges (does not replace) earlier custom_fields.
-  const secondPatchRes = await fetch(`${FEEDBACK_URL}/conversations/${id}/custom-fields`, {
-    method: 'PATCH',
-    headers: authHeaders(session.access_token),
-    body: JSON.stringify({ hubspot_owner_id: 7 }),
-  })
+  const secondPatchRes = await fetch(
+    `${FEEDBACK_URL}/conversations/${id}/custom-fields`,
+    {
+      method: 'PATCH',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({ hubspot_owner_id: 7 }),
+    },
+  )
   assertEquals(secondPatchRes.status, 200)
   await secondPatchRes.body?.cancel()
 
@@ -333,7 +358,10 @@ Deno.test('GET /feedback/send returns 405', async () => {
 // same transaction as the feedback row insert/update. We assert that with a
 // direct DB query using the application pool (which has SELECT on audit_logs).
 
-async function fetchAuditCountForTarget(action: string, feedbackId: number): Promise<number> {
+async function fetchAuditCountForTarget(
+  action: string,
+  feedbackId: number,
+): Promise<number> {
   const connection = await pool.connect()
   try {
     const result = await connection.queryObject<{ c: number }>`
@@ -357,8 +385,15 @@ Deno.test('POST /feedback/send emits profile.feedback_submitted audit log', asyn
   assertEquals(res.status, 201)
   const body = await res.json()
 
-  const count = await fetchAuditCountForTarget('profile.feedback_submitted', body.id)
-  assertEquals(count, 1, 'expected exactly one profile.feedback_submitted audit row')
+  const count = await fetchAuditCountForTarget(
+    'profile.feedback_submitted',
+    body.id,
+  )
+  assertEquals(
+    count,
+    1,
+    'expected exactly one profile.feedback_submitted audit row',
+  )
 })
 
 Deno.test('PATCH /feedback custom-fields emits profile.feedback_updated audit log', async () => {
@@ -372,14 +407,21 @@ Deno.test('PATCH /feedback custom-fields emits profile.feedback_updated audit lo
   const created = await createRes.json()
   const id: number = created.id
 
-  const patchRes = await fetch(`${FEEDBACK_URL}/conversations/${id}/custom-fields`, {
-    method: 'PATCH',
-    headers: authHeaders(session.access_token),
-    body: JSON.stringify({ org_id: 99 }),
-  })
+  const patchRes = await fetch(
+    `${FEEDBACK_URL}/conversations/${id}/custom-fields`,
+    {
+      method: 'PATCH',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({ org_id: 99 }),
+    },
+  )
   assertEquals(patchRes.status, 200)
   await patchRes.body?.cancel()
 
   const count = await fetchAuditCountForTarget('profile.feedback_updated', id)
-  assertEquals(count, 1, 'expected exactly one profile.feedback_updated audit row')
+  assertEquals(
+    count,
+    1,
+    'expected exactly one profile.feedback_updated audit row',
+  )
 })

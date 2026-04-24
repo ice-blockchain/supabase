@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import type {
   CreateOrganizationBody,
@@ -91,7 +91,7 @@ function rowToUpdateResponse(row: OrgRow): UpdateOrganizationResponse {
 
 export async function listOrganizations(
   pool: Pool,
-  profileId: number
+  profileId: number,
 ): Promise<OrganizationResponse[]> {
   const connection = await pool.connect()
   try {
@@ -111,7 +111,7 @@ export async function listOrganizations(
 export async function getOrganizationBySlug(
   pool: Pool,
   slug: string,
-  profileId: number
+  profileId: number,
 ): Promise<OrganizationSlugResponse | null> {
   const connection = await pool.connect()
   try {
@@ -133,7 +133,7 @@ export async function createOrganization(
   profileId: number,
   body: CreateOrganizationBody,
   gotrueId: string,
-  auditContext?: { email: string; ip: string; method: string; route: string }
+  auditContext?: { email: string; ip: string; method: string; route: string },
 ): Promise<OrganizationResponse> {
   const connection = await pool.connect()
   try {
@@ -176,7 +176,9 @@ export async function createOrganization(
           target_description, target_metadata, occurred_at
         ) VALUES (
           gen_random_uuid(), ${profileId}, ${org.id}, 'organizations.insert',
-          ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])}::jsonb,
+          ${
+        JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])
+      }::jsonb,
           ${gotrueId}, 'user',
           ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
           ${'organizations #' + org.id}, '{}'::jsonb, now()
@@ -220,7 +222,7 @@ export async function updateOrganization(
     additional_billing_emails?: string[]
   },
   gotrueId: string,
-  auditContext?: { email: string; ip: string; method: string; route: string }
+  auditContext?: { email: string; ip: string; method: string; route: string },
 ): Promise<UpdateOrganizationResponse | null> {
   const connection = await pool.connect()
   try {
@@ -272,7 +274,8 @@ export async function updateOrganization(
 
     const setClause = setClauses.join(', ')
     values.push(orgId)
-    const query = `UPDATE traffic.organizations SET ${setClause} WHERE id = $${paramIdx} RETURNING *`
+    const query =
+      `UPDATE traffic.organizations SET ${setClause} WHERE id = $${paramIdx} RETURNING *`
 
     const result = await tx.queryObject<OrgRow>({ text: query, args: values })
 
@@ -284,7 +287,9 @@ export async function updateOrganization(
           target_description, target_metadata, occurred_at
         ) VALUES (
           gen_random_uuid(), ${profileId}, ${result.rows[0].id}, 'organizations.update',
-          ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+          ${
+        JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+      }::jsonb,
           ${gotrueId}, 'user',
           ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
           ${'organizations #' + result.rows[0].id}, '{}'::jsonb, now()
@@ -304,7 +309,7 @@ export async function deleteOrganization(
   slug: string,
   profileId: number,
   gotrueId: string,
-  auditContext?: { email: string; ip: string; method: string; route: string }
+  auditContext?: { email: string; ip: string; method: string; route: string },
 ): Promise<boolean> {
   const connection = await pool.connect()
   try {
@@ -331,7 +336,9 @@ export async function deleteOrganization(
           target_description, target_metadata, occurred_at
         ) VALUES (
           gen_random_uuid(), ${profileId}, ${orgId}, 'organizations.delete',
-          ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+          ${
+        JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+      }::jsonb,
           ${gotrueId}, 'user',
           ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
           ${'organizations #' + orgId}, '{}'::jsonb, now()

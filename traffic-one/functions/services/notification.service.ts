@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import type { NotificationResponse, NotificationStatus } from '../types/api.ts'
 
@@ -27,7 +27,7 @@ function rowToResponse(row: NotificationRow): NotificationResponse {
 
 export async function listNotifications(
   pool: Pool,
-  profileId: number
+  profileId: number,
 ): Promise<NotificationResponse[]> {
   const connection = await pool.connect()
   try {
@@ -48,7 +48,7 @@ export async function bulkUpdateNotificationStatus(
   ids: string[],
   status: NotificationStatus,
   gotrueId: string,
-  auditContext?: { email: string; ip: string; method: string; route: string }
+  auditContext?: { email: string; ip: string; method: string; route: string },
 ): Promise<NotificationResponse[]> {
   const connection = await pool.connect()
   try {
@@ -70,7 +70,9 @@ export async function bulkUpdateNotificationStatus(
           target_description, target_metadata, occurred_at
         ) VALUES (
           gen_random_uuid(), ${profileId}, 'notifications.update',
-          ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+          ${
+        JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+      }::jsonb,
           ${gotrueId}, 'user',
           ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
           ${'notifications bulk update: ' + ids.length + ' items'}, '{}'::jsonb, now()
@@ -91,7 +93,7 @@ export async function updateNotificationStatus(
   notificationId: string,
   status: NotificationStatus,
   gotrueId: string,
-  auditContext?: { email: string; ip: string; method: string; route: string }
+  auditContext?: { email: string; ip: string; method: string; route: string },
 ): Promise<NotificationResponse | null> {
   const connection = await pool.connect()
   try {
@@ -118,7 +120,9 @@ export async function updateNotificationStatus(
           target_description, target_metadata, occurred_at
         ) VALUES (
           gen_random_uuid(), ${profileId}, 'notifications.update',
-          ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+          ${
+        JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+      }::jsonb,
           ${gotrueId}, 'user',
           ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
           ${'notifications #' + notificationId}, '{}'::jsonb, now()
@@ -135,7 +139,7 @@ export async function updateNotificationStatus(
 
 export async function getSummary(
   pool: Pool,
-  profileId: number
+  profileId: number,
 ): Promise<{ unread_count: number; read_count: number }> {
   const connection = await pool.connect()
   try {
@@ -165,7 +169,7 @@ export async function markAllArchived(
   pool: Pool,
   profileId: number,
   gotrueId: string,
-  auditContext?: { email: string; ip: string; method: string; route: string }
+  auditContext?: { email: string; ip: string; method: string; route: string },
 ): Promise<number> {
   const connection = await pool.connect()
   try {
@@ -188,7 +192,9 @@ export async function markAllArchived(
           target_description, target_metadata, occurred_at
         ) VALUES (
           gen_random_uuid(), ${profileId}, 'notifications.archive_all',
-          ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+          ${
+        JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+      }::jsonb,
           ${gotrueId}, 'user',
           ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
           ${'notifications archive_all: ' + archivedCount + ' items'}, '{}'::jsonb, now()

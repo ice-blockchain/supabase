@@ -1,9 +1,11 @@
-import { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 import { assert, assertEquals, assertExists } from 'jsr:@std/assert@1'
 
 import 'jsr:@std/dotenv/load'
 
-const pool = new Pool(Deno.env.get('TRAFFIC_DB_URL')!, 1, true)
+import { createRetryingPool } from '../_helpers/pool.ts'
+
+const pool = createRetryingPool(Deno.env.get('TRAFFIC_DB_URL')!)
 
 type Tx = ReturnType<Awaited<ReturnType<Pool['connect']>>['createTransaction']>
 
@@ -31,7 +33,7 @@ async function insertItem(
     visibility?: 'user' | 'project'
     content?: Record<string, unknown>
     favorite?: boolean
-  }
+  },
 ): Promise<string> {
   const result = await tx.queryObject<{ id: string }>`
     INSERT INTO traffic.content_items (
@@ -53,7 +55,7 @@ async function insertFolder(
     owner_id: number
     parent_id?: string | null
     name: string
-  }
+  },
 ): Promise<string> {
   const result = await tx.queryObject<{ id: string }>`
     INSERT INTO traffic.content_folders (project_ref, owner_id, parent_id, name)
@@ -69,9 +71,8 @@ async function insertFolder(
 // ── Defaults & constraints ─────────────────────────────────
 
 Deno.test('content_items: default values and CHECK constraints', async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_content_defaults')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_content_defaults')
     await tx.begin()
     const ownerId = await createTestProfile(tx, '01')
 
@@ -106,15 +107,12 @@ Deno.test('content_items: default values and CHECK constraints', async () => {
     assert(badType, 'invalid type should violate CHECK constraint')
 
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })
 
 Deno.test('content_items: invalid visibility rejected', async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_content_vis_constraint')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_content_vis_constraint')
     await tx.begin()
     const ownerId = await createTestProfile(tx, '02')
 
@@ -130,9 +128,7 @@ Deno.test('content_items: invalid visibility rejected', async () => {
     assert(threw, 'invalid visibility should violate CHECK constraint')
 
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })
 
 // ── Visibility rules (read enforcement) ────────────────────
@@ -140,9 +136,8 @@ Deno.test('content_items: invalid visibility rejected', async () => {
 Deno.test(
   "visibility rules: 'user' items are invisible to other users, 'project' items are visible",
   async () => {
-    const connection = await pool.connect()
-    const tx = connection.createTransaction('test_content_visibility')
-    try {
+    await pool.withConnection(async (connection) => {
+      const tx = connection.createTransaction('test_content_visibility')
       await tx.begin()
       const ownerId = await createTestProfile(tx, '03')
       const otherId = await createTestProfile(tx, '04')
@@ -177,22 +172,25 @@ Deno.test(
         AND (owner_id = ${otherId} OR visibility = 'project')
     `
       const otherIds = new Set(otherRows.rows.map((r) => r.id))
-      assert(!otherIds.has(privateId), "other user must NOT see 'user' visibility item")
-      assert(otherIds.has(sharedId), "other user must see 'project' visibility item")
+      assert(
+        !otherIds.has(privateId),
+        "other user must NOT see 'user' visibility item",
+      )
+      assert(
+        otherIds.has(sharedId),
+        "other user must see 'project' visibility item",
+      )
 
       await tx.rollback()
-    } finally {
-      connection.release()
-    }
-  }
+    })
+  },
 )
 
 // ── Ownership enforcement on writes ────────────────────────
 
 Deno.test("ownership: UPDATE gated by owner_id does not touch another user's row", async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_content_ownership_update')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_content_ownership_update')
     await tx.begin()
     const ownerId = await createTestProfile(tx, '05')
     const intruderId = await createTestProfile(tx, '06')
@@ -219,15 +217,12 @@ Deno.test("ownership: UPDATE gated by owner_id does not touch another user's row
     assertEquals(after.rows[0].name, 'orig')
 
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })
 
 Deno.test("ownership: DELETE gated by owner_id does not remove another user's rows", async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_content_ownership_delete')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_content_ownership_delete')
     await tx.begin()
     const ownerId = await createTestProfile(tx, '07')
     const intruderId = await createTestProfile(tx, '08')
@@ -260,17 +255,14 @@ Deno.test("ownership: DELETE gated by owner_id does not remove another user's ro
     assertEquals(remaining.rows[0].id, otherOwnedId)
 
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })
 
 // ── Cascade & detach semantics ─────────────────────────────
 
 Deno.test('cascade: deleting a parent folder cascades to child folders', async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_content_cascade_folders')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_content_cascade_folders')
     await tx.begin()
     const ownerId = await createTestProfile(tx, '09')
 
@@ -307,17 +299,14 @@ Deno.test('cascade: deleting a parent folder cascades to child folders', async (
     assert(!ids.includes(grandchild))
 
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })
 
 Deno.test(
   'detach: deleting a folder sets folder_id to NULL on its items (ON DELETE SET NULL)',
   async () => {
-    const connection = await pool.connect()
-    const tx = connection.createTransaction('test_content_detach_items')
-    try {
+    await pool.withConnection(async (connection) => {
+      const tx = connection.createTransaction('test_content_detach_items')
       await tx.begin()
       const ownerId = await createTestProfile(tx, '10')
 
@@ -333,7 +322,8 @@ Deno.test(
         name: 'inside folder',
       })
 
-      await tx.queryObject`DELETE FROM traffic.content_folders WHERE id = ${folderId}::uuid`
+      await tx
+        .queryObject`DELETE FROM traffic.content_folders WHERE id = ${folderId}::uuid`
 
       const item = await tx.queryObject<{ folder_id: string | null }>`
       SELECT folder_id FROM traffic.content_items WHERE id = ${itemId}::uuid
@@ -342,18 +332,15 @@ Deno.test(
       assertEquals(item.rows[0].folder_id, null)
 
       await tx.rollback()
-    } finally {
-      connection.release()
-    }
-  }
+    })
+  },
 )
 
 // ── Count aggregates (service shape) ───────────────────────
 
 Deno.test('count: favorites / private / shared aggregations are correct', async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_content_count')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_content_count')
     await tx.begin()
     const ownerId = await createTestProfile(tx, '11')
     const otherId = await createTestProfile(tx, '12')
@@ -417,17 +404,14 @@ Deno.test('count: favorites / private / shared aggregations are correct', async 
     assertEquals(row.shared, 2)
 
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })
 
 // ── Profile cascade ────────────────────────────────────────
 
 Deno.test('profile cascade: deleting a profile removes their content and folders', async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_profile_cascade')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_profile_cascade')
     await tx.begin()
     const ownerId = await createTestProfile(tx, '13')
 
@@ -455,7 +439,5 @@ Deno.test('profile cascade: deleting a profile removes their content and folders
     assertEquals(items.rows.length, 0)
 
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })

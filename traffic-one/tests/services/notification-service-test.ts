@@ -1,28 +1,30 @@
-import { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 import { assertEquals } from 'jsr:@std/assert@1'
 
 import 'jsr:@std/dotenv/load'
 
+import { createRetryingPool } from '../_helpers/pool.ts'
 import { getSummary, markAllArchived } from '../../functions/services/notification.service.ts'
 
-const pool = new Pool(Deno.env.get('TRAFFIC_DB_URL')!, 1, true)
+const pool = createRetryingPool(Deno.env.get('TRAFFIC_DB_URL')!)
 
 async function createTestProfile(
   tx: ReturnType<Awaited<ReturnType<Pool['connect']>>['createTransaction']>,
-  suffix: string
+  suffix: string,
 ) {
   const result = await tx.queryObject<{ id: number }>`
     INSERT INTO traffic.profiles (gotrue_id, username, primary_email)
-    VALUES (${'00000000-0000-0000-0000-00000000b' + suffix}, ${'notifuser' + suffix}, ${suffix + '@test.com'})
+    VALUES (${'00000000-0000-0000-0000-00000000b' + suffix}, ${'notifuser' + suffix}, ${
+    suffix + '@test.com'
+  })
     RETURNING id
   `
   return result.rows[0].id
 }
 
 Deno.test('list notifications returns empty for new profile', async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_empty_notifications')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_empty_notifications')
     await tx.begin()
     const profileId = await createTestProfile(tx, '001')
 
@@ -31,15 +33,12 @@ Deno.test('list notifications returns empty for new profile', async () => {
     `
     assertEquals(result.rows.length, 0)
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })
 
 Deno.test('insert and retrieve notification', async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_insert_notification')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_insert_notification')
     await tx.begin()
     const profileId = await createTestProfile(tx, '002')
 
@@ -48,7 +47,9 @@ Deno.test('insert and retrieve notification', async () => {
       VALUES (${profileId}, 'Test Notification', '{"key":"value"}'::jsonb, '{}'::jsonb, 'Warning', 'new')
     `
 
-    const result = await tx.queryObject<{ name: string; priority: string; status: string }>`
+    const result = await tx.queryObject<
+      { name: string; priority: string; status: string }
+    >`
       SELECT name, priority, status FROM traffic.notifications WHERE profile_id = ${profileId}
     `
     assertEquals(result.rows.length, 1)
@@ -56,15 +57,12 @@ Deno.test('insert and retrieve notification', async () => {
     assertEquals(result.rows[0].priority, 'Warning')
     assertEquals(result.rows[0].status, 'new')
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })
 
 Deno.test('update notification status', async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_update_notification_status')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_update_notification_status')
     await tx.begin()
     const profileId = await createTestProfile(tx, '003')
 
@@ -84,15 +82,12 @@ Deno.test('update notification status', async () => {
     `
     assertEquals(result.rows[0].status, 'seen')
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })
 
 Deno.test('bulk update notification status', async () => {
-  const connection = await pool.connect()
-  const tx = connection.createTransaction('test_bulk_update')
-  try {
+  await pool.withConnection(async (connection) => {
+    const tx = connection.createTransaction('test_bulk_update')
     await tx.begin()
     const profileId = await createTestProfile(tx, '004')
 
@@ -116,9 +111,7 @@ Deno.test('bulk update notification status', async () => {
     assertEquals(result.rows.length, 2)
     result.rows.forEach((r) => assertEquals(r.status, 'archived'))
     await tx.rollback()
-  } finally {
-    connection.release()
-  }
+  })
 })
 
 // ── Service-level tests for the Bundle B additions ──────────
@@ -132,12 +125,10 @@ async function cleanupProfile(profileId: number) {
   // Cascades to traffic.notifications and traffic.audit_logs via FK ON DELETE
   // CASCADE. Swallow errors so a failed cleanup doesn't mask the test result.
   try {
-    const cleanConn = await pool.connect()
-    try {
-      await cleanConn.queryObject`DELETE FROM traffic.profiles WHERE id = ${profileId}`
-    } finally {
-      cleanConn.release()
-    }
+    await pool.withConnection(async (cleanConn) => {
+      await cleanConn
+        .queryObject`DELETE FROM traffic.profiles WHERE id = ${profileId}`
+    })
   } catch {
     /* best-effort */
   }
@@ -146,8 +137,7 @@ async function cleanupProfile(profileId: number) {
 Deno.test('getSummary returns aggregated unread/read counts for profile', async () => {
   let profileId: number | null = null
   try {
-    const setup = await pool.connect()
-    try {
+    profileId = await pool.withConnection(async (setup) => {
       const profile = await setup.queryObject<{ id: number }>`
         INSERT INTO traffic.profiles (gotrue_id, username, primary_email)
         VALUES (
@@ -157,18 +147,17 @@ Deno.test('getSummary returns aggregated unread/read counts for profile', async 
         )
         RETURNING id
       `
-      profileId = profile.rows[0].id
+      const id = profile.rows[0].id
       await setup.queryObject`
         INSERT INTO traffic.notifications (profile_id, name, priority, status)
         VALUES
-          (${profileId}, 'n-new-1', 'Info', 'new'),
-          (${profileId}, 'n-new-2', 'Info', 'new'),
-          (${profileId}, 'n-seen-1', 'Info', 'seen'),
-          (${profileId}, 'n-arch-1', 'Info', 'archived')
+          (${id}, 'n-new-1', 'Info', 'new'),
+          (${id}, 'n-new-2', 'Info', 'new'),
+          (${id}, 'n-seen-1', 'Info', 'seen'),
+          (${id}, 'n-arch-1', 'Info', 'archived')
       `
-    } finally {
-      setup.release()
-    }
+      return id
+    })
 
     // getSummary counts archived as "read" to prevent the bell from resetting
     // to 0/0 after the user archives notifications. (Regression test for H1.)
@@ -185,8 +174,7 @@ Deno.test("markAllArchived flips only the target profile's non-archived rows", a
   let profileId2: number | null = null
   let gotrueId1 = ''
   try {
-    const setup = await pool.connect()
-    try {
+    const ids = await pool.withConnection(async (setup) => {
       gotrueId1 = crypto.randomUUID()
       const gotrueId2 = crypto.randomUUID()
       const ts = Date.now()
@@ -195,34 +183,43 @@ Deno.test("markAllArchived flips only the target profile's non-archived rows", a
         VALUES (${gotrueId1}, ${'archive-src-' + ts}, ${'archive-src-' + ts + '@test.com'})
         RETURNING id
       `
-      profileId1 = p1.rows[0].id
+      const id1 = p1.rows[0].id
       const p2 = await setup.queryObject<{ id: number }>`
         INSERT INTO traffic.profiles (gotrue_id, username, primary_email)
         VALUES (${gotrueId2}, ${'archive-other-' + ts}, ${'archive-other-' + ts + '@test.com'})
         RETURNING id
       `
-      profileId2 = p2.rows[0].id
+      const id2 = p2.rows[0].id
 
       await setup.queryObject`
         INSERT INTO traffic.notifications (profile_id, name, priority, status)
         VALUES
-          (${profileId1}, 'p1-new', 'Info', 'new'),
-          (${profileId1}, 'p1-seen', 'Info', 'seen'),
-          (${profileId1}, 'p1-arch', 'Info', 'archived'),
-          (${profileId2}, 'p2-new', 'Info', 'new'),
-          (${profileId2}, 'p2-seen', 'Info', 'seen')
+          (${id1}, 'p1-new', 'Info', 'new'),
+          (${id1}, 'p1-seen', 'Info', 'seen'),
+          (${id1}, 'p1-arch', 'Info', 'archived'),
+          (${id2}, 'p2-new', 'Info', 'new'),
+          (${id2}, 'p2-seen', 'Info', 'seen')
       `
-    } finally {
-      setup.release()
-    }
+      return { id1, id2 }
+    })
+    profileId1 = ids.id1
+    profileId2 = ids.id2
 
     // Pass auditContext=undefined so the service doesn't write an audit row
     // (traffic_api has no DELETE on audit_logs, keeping cleanup clean).
-    const archived = await markAllArchived(pool, profileId1, gotrueId1, undefined)
-    assertEquals(archived, 2, 'should archive only the two non-archived rows for profile1')
+    const archived = await markAllArchived(
+      pool,
+      profileId1,
+      gotrueId1,
+      undefined,
+    )
+    assertEquals(
+      archived,
+      2,
+      'should archive only the two non-archived rows for profile1',
+    )
 
-    const verify = await pool.connect()
-    try {
+    await pool.withConnection(async (verify) => {
       const p1Rows = await verify.queryObject<{ status: string }>`
         SELECT status FROM traffic.notifications WHERE profile_id = ${profileId1}
       `
@@ -237,9 +234,7 @@ Deno.test("markAllArchived flips only the target profile's non-archived rows", a
       assertEquals(p2Rows.rows.length, 2)
       assertEquals(p2Rows.rows[0].status, 'new')
       assertEquals(p2Rows.rows[1].status, 'seen')
-    } finally {
-      verify.release()
-    }
+    })
   } finally {
     if (profileId1 !== null) await cleanupProfile(profileId1)
     if (profileId2 !== null) await cleanupProfile(profileId2)

@@ -1,4 +1,4 @@
-import type { Pool } from 'https://deno.land/x/postgres@v0.17.0/mod.ts'
+import type { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts'
 
 import type {
   CreateProjectBody,
@@ -68,7 +68,7 @@ export async function createProject(
   profileId: number,
   gotrueId: string,
   body: CreateProjectBody,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<CreateProjectResponse | null> {
   const connection = await pool.connect()
   try {
@@ -97,17 +97,24 @@ export async function createProject(
     })
 
     const status = isLocalMode() ? 'ACTIVE_HEALTHY' : 'COMING_UP'
-    const connString = `postgresql://postgres:${credentials.db_pass}@${credentials.db_host}:5432/postgres`
+    const connString =
+      `postgresql://postgres:${credentials.db_pass}@${credentials.db_host}:5432/postgres`
 
     // Store sensitive credentials in Vault
     const serviceKeySecret = await tx.queryObject<{ id: string }>`
-      SELECT vault.create_secret(${credentials.service_key}, ${'project_' + ref + '_service_key'}, 'Service role key') AS id
+      SELECT vault.create_secret(${credentials.service_key}, ${
+      'project_' + ref + '_service_key'
+    }, 'Service role key') AS id
     `
     const dbPassSecret = await tx.queryObject<{ id: string }>`
-      SELECT vault.create_secret(${credentials.db_pass}, ${'project_' + ref + '_db_pass'}, 'Database password') AS id
+      SELECT vault.create_secret(${credentials.db_pass}, ${
+      'project_' + ref + '_db_pass'
+    }, 'Database password') AS id
     `
     const connStringSecret = await tx.queryObject<{ id: string }>`
-      SELECT vault.create_secret(${connString}, ${'project_' + ref + '_conn_string'}, 'Connection string') AS id
+      SELECT vault.create_secret(${connString}, ${
+      'project_' + ref + '_conn_string'
+    }, 'Connection string') AS id
     `
 
     const projectResult = await tx.queryObject<ProjectRow>`
@@ -135,7 +142,9 @@ export async function createProject(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${org.id}, 'projects.insert',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 201 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'projects #' + project.id + ' (ref: ' + ref + ')'}, '{}'::jsonb, now()
@@ -169,10 +178,29 @@ export async function createProject(
 
 // ── Get by ref ────────────────────────────────────────────
 
+// M7 (anti-enumeration policy):
+//
+// This function returns `null` for BOTH "project does not exist" and
+// "project exists but the caller is not a member of the owning
+// organization". Every traffic-one dispatcher translates that `null` into
+// an HTTP 404. This is INTENTIONAL — the alternative (returning 403 when
+// the row exists but the caller isn't a member) leaks ref existence to
+// unauthenticated attackers: a fleet of low-privilege users could iterate
+// refs and tell, by the 403-vs-404 signal, which refs are real.
+//
+// Trade-off: a legitimate user who mis-types a ref sees the same 404 as
+// someone probing another tenant's project. That's acceptable — the
+// common case is Studio auto-filling the ref, and a 403 would require
+// both a membership lookup AND a separate "does it exist at all" query,
+// adding complexity AND a side-channel.
+//
+// If you ever want to switch to 403 for non-members (e.g. for GDPR
+// auditing needs), do it uniformly across every `getProjectByRef`
+// consumer and update ARCHITECTURE.md §"Membership / 404 policy".
 export async function getProjectByRef(
   pool: Pool,
   ref: string,
-  profileId: number
+  profileId: number,
 ): Promise<ProjectDetailResponse | null> {
   const connection = await pool.connect()
   try {
@@ -225,7 +253,7 @@ export async function listProjectsPaginated(
   pool: Pool,
   profileId: number,
   limit = 100,
-  offset = 0
+  offset = 0,
 ): Promise<ListProjectsPaginatedResponse> {
   const connection = await pool.connect()
   try {
@@ -276,7 +304,7 @@ export async function listOrgProjects(
   pool: Pool,
   orgId: number,
   limit = 100,
-  offset = 0
+  offset = 0,
 ): Promise<OrganizationProjectsResponse> {
   const connection = await pool.connect()
   try {
@@ -327,7 +355,7 @@ export async function updateProject(
   profileId: number,
   updates: { name?: string },
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<RemoveProjectResponse | null> {
   const connection = await pool.connect()
   try {
@@ -364,7 +392,9 @@ export async function updateProject(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${project.organization_id}, 'projects.update',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'projects #' + project.id + ' (ref: ' + ref + ')'}, '{}'::jsonb, now()
@@ -385,7 +415,7 @@ export async function deleteProject(
   ref: string,
   profileId: number,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<RemoveProjectResponse | null> {
   const connection = await pool.connect()
   try {
@@ -406,13 +436,15 @@ export async function deleteProject(
 
     // Clean up Vault secrets
     if (project.service_key_secret_id) {
-      await tx.queryObject`DELETE FROM vault.secrets WHERE id = ${project.service_key_secret_id}::uuid`
+      await tx
+        .queryObject`DELETE FROM vault.secrets WHERE id = ${project.service_key_secret_id}::uuid`
     }
     if (project.db_pass_secret_id) {
       await tx.queryObject`DELETE FROM vault.secrets WHERE id = ${project.db_pass_secret_id}::uuid`
     }
     if (project.connection_string_secret_id) {
-      await tx.queryObject`DELETE FROM vault.secrets WHERE id = ${project.connection_string_secret_id}::uuid`
+      await tx
+        .queryObject`DELETE FROM vault.secrets WHERE id = ${project.connection_string_secret_id}::uuid`
     }
 
     await tx.queryObject`
@@ -422,7 +454,9 @@ export async function deleteProject(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${project.organization_id}, 'projects.delete',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'projects #' + project.id + ' (ref: ' + ref + ')'}, '{}'::jsonb, now()
@@ -450,7 +484,7 @@ export async function deleteProject(
 export async function getProjectStatus(
   pool: Pool,
   ref: string,
-  profileId: number
+  profileId: number,
 ): Promise<{ status: string } | null> {
   const connection = await pool.connect()
   try {
@@ -475,7 +509,7 @@ export async function setProjectStatus(
   profileId: number,
   newStatus: string,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<RemoveProjectResponse | null> {
   const connection = await pool.connect()
   try {
@@ -508,7 +542,9 @@ export async function setProjectStatus(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${project.organization_id}, ${actionName},
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'projects #' + project.id + ' (ref: ' + ref + ')'}, '{}'::jsonb, now()
@@ -541,7 +577,7 @@ async function highestRoleInOrg(
     queryObject: <T>(strs: TemplateStringsArray, ...vals: unknown[]) => Promise<{ rows: T[] }>
   },
   orgId: number,
-  profileId: number
+  profileId: number,
 ): Promise<number> {
   const result = await tx.queryObject<{ max_role: number | null }>`
     SELECT MAX(role_id) as max_role
@@ -555,7 +591,7 @@ export async function transferProjectPreview(
   pool: Pool,
   ref: string,
   profileId: number,
-  targetOrgSlug: string
+  targetOrgSlug: string,
 ): Promise<TransferPreviewResult> {
   const connection = await pool.connect()
   try {
@@ -573,7 +609,7 @@ export async function transferProjectPreview(
     const sourceRole = await highestRoleInOrg(
       connection,
       projectResult.rows[0].organization_id,
-      profileId
+      profileId,
     )
     if (sourceRole < MIN_ROLE_FOR_TRANSFER) {
       return {
@@ -619,7 +655,7 @@ export async function transferProject(
   profileId: number,
   targetOrgSlug: string,
   gotrueId: string,
-  auditContext: AuditContext
+  auditContext: AuditContext,
 ): Promise<TransferProjectResult> {
   const connection = await pool.connect()
   try {
@@ -675,7 +711,9 @@ export async function transferProject(
         target_description, target_metadata, occurred_at
       ) VALUES (
         gen_random_uuid(), ${profileId}, ${targetOrg.rows[0].id}, 'projects.transfer',
-        ${JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])}::jsonb,
+        ${
+      JSON.stringify([{ method: auditContext.method, route: auditContext.route, status: 200 }])
+    }::jsonb,
         ${gotrueId}, 'user',
         ${JSON.stringify([{ email: auditContext.email, ip: auditContext.ip }])}::jsonb,
         ${'projects #' + project.id + ' (ref: ' + ref + ')'}, '{}'::jsonb, now()
