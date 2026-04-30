@@ -98,6 +98,58 @@ services:
     plugins:
       - name: cors
 
+  ## Open Auth routes used by Studio platform mode (AuthClient without apikey)
+  - name: auth-v1-open-token
+    _comment: 'Auth: /auth/v1/token* -> http://auth:9999/token*'
+    url: http://auth:9999/token
+    routes:
+      - name: auth-v1-open-token
+        strip_path: true
+        paths:
+          - /auth/v1/token
+    plugins:
+      - name: cors
+  - name: auth-v1-open-user
+    _comment: 'Auth: /auth/v1/user* -> http://auth:9999/user*'
+    url: http://auth:9999/user
+    routes:
+      - name: auth-v1-open-user
+        strip_path: true
+        paths:
+          - /auth/v1/user
+    plugins:
+      - name: cors
+  - name: auth-v1-open-logout
+    _comment: 'Auth: /auth/v1/logout* -> http://auth:9999/logout*'
+    url: http://auth:9999/logout
+    routes:
+      - name: auth-v1-open-logout
+        strip_path: true
+        paths:
+          - /auth/v1/logout
+    plugins:
+      - name: cors
+  - name: auth-v1-open-signup
+    _comment: 'Auth: /auth/v1/signup* -> http://auth:9999/signup*'
+    url: http://auth:9999/signup
+    routes:
+      - name: auth-v1-open-signup
+        strip_path: true
+        paths:
+          - /auth/v1/signup
+    plugins:
+      - name: cors
+  - name: auth-v1-open-recover
+    _comment: 'Auth: /auth/v1/recover* -> http://auth:9999/recover*'
+    url: http://auth:9999/recover
+    routes:
+      - name: auth-v1-open-recover
+        strip_path: true
+        paths:
+          - /auth/v1/recover
+    plugins:
+      - name: cors
+
   ## Secure Auth routes
   - name: auth-v1
     _comment: 'Auth: /auth/v1/* -> http://auth:9999/*'
@@ -353,7 +405,7 @@ services:
   ## Block access to /api/mcp
   - name: mcp-blocker
     _comment: 'Block direct access to /api/mcp'
-    url: http://studio:3000/api/mcp
+    url: http://studio:8082/api/mcp
     routes:
       - name: mcp-blocker-route
         strip_path: true
@@ -367,8 +419,8 @@ services:
 
   ## MCP endpoint - local access
   - name: mcp
-    _comment: 'MCP: /mcp -> http://studio:3000/api/mcp (local access)'
-    url: http://studio:3000/api/mcp
+    _comment: 'MCP: /mcp -> http://studio:8082/api/mcp (local access)'
+    url: http://studio:8082/api/mcp
     routes:
       - name: mcp
         strip_path: true
@@ -392,10 +444,280 @@ services:
       #      - ::1
       #    deny: []
 
+  ## Platform Profile API -> Edge Function
+  - name: platform-profile
+    _comment: 'traffic-one: /api/platform/profile* -> http://functions:9000/traffic-one/*'
+    url: http://functions:9000/traffic-one
+    routes:
+      - name: platform-profile-all
+        strip_path: true
+        paths:
+          - /api/platform/profile
+    plugins:
+      - name: cors
+
+  ## Platform Signup API -> Edge Function
+  - name: platform-signup
+    _comment: 'traffic-one: /api/platform/signup -> http://functions:9000/traffic-one/signup'
+    url: http://functions:9000/traffic-one/signup
+    routes:
+      - name: platform-signup-route
+        strip_path: true
+        paths:
+          - /api/platform/signup
+    plugins:
+      - name: cors
+
+  ## Platform Reset Password API -> Edge Function
+  - name: platform-reset-password
+    _comment: 'traffic-one: /api/platform/reset-password -> http://functions:9000/traffic-one/reset-password'
+    url: http://functions:9000/traffic-one/reset-password
+    routes:
+      - name: platform-reset-password-route
+        strip_path: true
+        paths:
+          - /api/platform/reset-password
+    plugins:
+      - name: cors
+
+  ## Platform Organizations API -> Edge Function
+  - name: platform-organizations
+    _comment: 'traffic-one: /api/platform/organizations* -> http://functions:9000/traffic-one/organizations*'
+    url: http://functions:9000/traffic-one/organizations
+    routes:
+      - name: platform-organizations-route
+        strip_path: true
+        paths:
+          - /api/platform/organizations
+    plugins:
+      - name: cors
+
+  ## Platform Projects Resource Warnings -> Edge Function
+  - name: platform-projects-resource-warnings
+    _comment: 'traffic-one: /api/platform/projects-resource-warnings -> http://functions:9000/traffic-one/projects-resource-warnings'
+    url: http://functions:9000/traffic-one/projects-resource-warnings
+    routes:
+      - name: platform-projects-resource-warnings-route
+        strip_path: true
+        paths:
+          - /api/platform/projects-resource-warnings
+    plugins:
+      - name: cors
+
+  ## Platform Stripe API -> Edge Function
+  - name: platform-stripe
+    _comment: 'traffic-one: /api/platform/stripe* -> http://functions:9000/traffic-one/stripe*'
+    url: http://functions:9000/traffic-one/stripe
+    routes:
+      - name: platform-stripe-route
+        strip_path: true
+        paths:
+          - /api/platform/stripe
+    plugins:
+      - name: cors
+
+  ## Platform Projects API -> Edge Function
+  - name: platform-projects
+    _comment: 'traffic-one: /api/platform/projects* -> http://functions:9000/traffic-one/projects*'
+    url: http://functions:9000/traffic-one/projects
+    routes:
+      - name: platform-projects-route
+        strip_path: true
+        paths:
+          - /api/platform/projects
+    plugins:
+      - name: cors
+
+  ## Platform Notifications API -> Edge Function
+  - name: platform-notifications
+    _comment: 'traffic-one: /api/platform/notifications* -> http://functions:9000/traffic-one/notifications*'
+    url: http://functions:9000/traffic-one/notifications
+    routes:
+      - name: platform-notifications-route
+        strip_path: true
+        paths:
+          - /api/platform/notifications
+    plugins:
+      - name: cors
+
+  ## Platform Telemetry -> Edge Function
+  - name: platform-telemetry
+    _comment: 'traffic-one: /api/platform/telemetry* -> http://functions:9000/traffic-one/telemetry*'
+    url: http://functions:9000/traffic-one/telemetry
+    routes:
+      - name: platform-telemetry-route
+        strip_path: true
+        paths:
+          - /api/platform/telemetry
+    plugins:
+      - name: cors
+
+  ## V1 Projects Health API -> Edge Function
+  - name: v1-projects-health
+    _comment: 'traffic-one: /api/v1/projects -> http://functions:9000/traffic-one/v1-projects'
+    url: http://functions:9000/traffic-one/v1-projects
+    routes:
+      - name: v1-projects-health-route
+        strip_path: true
+        paths:
+          - /api/v1/projects
+    plugins:
+      - name: cors
+
+  ## V1 Branches API -> Edge Function
+  ## /api/v1/branches/{id}/* is NOT nested under /projects/{ref}, so it needs
+  ## its own Kong service. Covers branch diff, merge, push, reset, and delete
+  ## operations after a branch has been created under /api/v1/projects/{ref}/branches.
+  - name: v1-branches
+    _comment: 'traffic-one: /api/v1/branches -> http://functions:9000/traffic-one/v1-branches'
+    url: http://functions:9000/traffic-one/v1-branches
+    routes:
+      - name: v1-branches-route
+        strip_path: true
+        paths:
+          - /api/v1/branches
+    plugins:
+      - name: cors
+
+  ## V1 Organizations API -> Edge Function
+  ## Only /api/v1/organizations/{slug}/project-claim/{token} is wired today
+  ## (AWS-marketplace project-transfer flow). The handler returns a "not valid" stub
+  ## so Studio doesn't 404 on claim-project links in self-hosted.
+  - name: v1-organizations
+    _comment: 'traffic-one: /api/v1/organizations -> http://functions:9000/traffic-one/v1-organizations'
+    url: http://functions:9000/traffic-one/v1-organizations
+    routes:
+      - name: v1-organizations-route
+        strip_path: true
+        paths:
+          - /api/v1/organizations
+    plugins:
+      - name: cors
+
+  ## Platform Update Email API -> Edge Function
+  - name: platform-update-email
+    _comment: 'traffic-one: /api/platform/update-email -> http://functions:9000/traffic-one/update-email'
+    url: http://functions:9000/traffic-one/update-email
+    routes:
+      - name: platform-update-email-route
+        strip_path: true
+        paths:
+          - /api/platform/update-email
+    plugins:
+      - name: cors
+
+  ## Platform Auth API -> Edge Function
+  ##
+  ## Covers BOTH the config surface (/api/platform/auth/{ref}/config[/hooks])
+  ## AND the GoTrue admin surface (/users*, /invite, /magiclink, /recover,
+  ## /otp, /users/{id}/factors, /validate/spam). traffic-one's index.ts
+  ## routes config paths to handleAuthConfig and everything else to
+  ## handleProjectAuthAdmin, which resolves the per-project backend and
+  ## signs outbound calls with that project's service_role key.
+  ##
+  ## The Studio Next stubs under apps/studio/pages/api/platform/auth/[ref]/*
+  ## are now UNREACHABLE via Kong (this route wins). They remain in the tree
+  ## as an escape hatch for legacy / non-Kong deployments only.
+  ##
+  ## strip_path: false preserves the original path; traffic-one/index.ts
+  ## strips the `/api/platform/auth` prefix before dispatch.
+  - name: platform-auth
+    _comment: 'traffic-one: /api/platform/auth/{ref}/* -> http://functions:9000/traffic-one/api/platform/auth/{ref}/*'
+    url: http://functions:9000/traffic-one
+    routes:
+      - name: platform-auth-route
+        strip_path: false
+        paths:
+          - /api/platform/auth/
+    plugins:
+      - name: cors
+
+  ## Platform pg-meta API -> Edge Function
+  ##
+  ## Covers POST /api/platform/pg-meta/{ref}/query (SQL runner; audited) and
+  ## the read-only GET surfaces (tables, triggers, types, policies, extensions,
+  ## foreign-tables, materialized-views, views, column-privileges, publications).
+  ## traffic-one/index.ts strips the `/api/platform/pg-meta` prefix and
+  ## dispatches to handleProjectPgMeta, which resolves the per-project backend
+  ## and signs outbound calls with that project's service_role key.
+  ##
+  ## The Studio Next stubs under apps/studio/pages/api/platform/pg-meta/[ref]/*
+  ## are now UNREACHABLE via Kong (this route wins). They remain in the tree
+  ## as an escape hatch for legacy / non-Kong deployments only.
+  ##
+  ## strip_path: false preserves the original path; traffic-one/index.ts
+  ## strips the `/api/platform/pg-meta` prefix before dispatch.
+  ##
+  ## We list BOTH `/api/platform/pg-meta/` (trailing slash) AND
+  ## `/api/platform/pg-meta` so clients that emit the bare prefix (e.g.
+  ## `curl http://kong:8000/api/platform/pg-meta/abc/tables` is fine, but
+  ## `http://kong:8000/api/platform/pg-meta` alone used to 404) still match
+  ## the route. Kong prefix-matches each entry separately; the entry
+  ## without the trailing slash is required to catch bare-prefix requests.
+  - name: platform-pg-meta
+    _comment: 'traffic-one: /api/platform/pg-meta/{ref}/* -> http://functions:9000/traffic-one/api/platform/pg-meta/{ref}/*'
+    url: http://functions:9000/traffic-one
+    routes:
+      - name: platform-pg-meta-route
+        strip_path: false
+        paths:
+          - /api/platform/pg-meta/
+          - /api/platform/pg-meta
+    plugins:
+      - name: cors
+
+  ## Platform Database API -> Edge Function
+  - name: platform-database
+    _comment: 'traffic-one: /api/platform/database* -> http://functions:9000/traffic-one/database*'
+    url: http://functions:9000/traffic-one/database
+    routes:
+      - name: platform-database-route
+        strip_path: true
+        paths:
+          - /api/platform/database
+    plugins:
+      - name: cors
+
+  ## Platform Replication API -> Edge Function
+  - name: platform-replication
+    _comment: 'traffic-one: /api/platform/replication* -> http://functions:9000/traffic-one/replication*'
+    url: http://functions:9000/traffic-one/replication
+    routes:
+      - name: platform-replication-route
+        strip_path: true
+        paths:
+          - /api/platform/replication
+    plugins:
+      - name: cors
+
+  ## Platform Feedback API -> Edge Function
+  - name: platform-feedback
+    _comment: 'traffic-one: /api/platform/feedback* -> http://functions:9000/traffic-one/feedback*'
+    url: http://functions:9000/traffic-one/feedback
+    routes:
+      - name: platform-feedback-route
+        strip_path: true
+        paths:
+          - /api/platform/feedback
+    plugins:
+      - name: cors
+
+  ## Platform CLI API -> Edge Function
+  - name: platform-cli
+    _comment: 'traffic-one: /api/platform/cli* -> http://functions:9000/traffic-one/cli*'
+    url: http://functions:9000/traffic-one/cli
+    routes:
+      - name: platform-cli-route
+        strip_path: true
+        paths:
+          - /api/platform/cli
+    plugins:
+      - name: cors
+
   ## Protected Dashboard - catch all remaining routes
   - name: dashboard
-    _comment: 'Studio: /* -> http://studio:3000/*'
-    url: http://studio:3000/
+    _comment: 'Studio: /* -> http://studio:8082/*'
+    url: http://studio:8082/
     routes:
       - name: dashboard-all
         strip_path: true
@@ -403,6 +725,3 @@ services:
           - /
     plugins:
       - name: cors
-      - name: basic-auth
-        config:
-          hide_credentials: true

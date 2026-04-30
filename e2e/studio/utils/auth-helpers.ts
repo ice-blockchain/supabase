@@ -1,6 +1,7 @@
 import { expect, Page } from '@playwright/test'
-import { waitForApiResponse } from './wait-for-response.js'
+
 import { toUrl } from './to-url.js'
+import { waitForApiResponse } from './wait-for-response.js'
 
 export const createUserViaUI = async (page: Page, ref: string, email: string, password: string) => {
   // Open the Add user dropdown
@@ -21,11 +22,24 @@ export const createUserViaUI = async (page: Page, ref: string, email: string, pa
   // Verify that "Auto Confirm User?" is checked by default
   await expect(page.getByRole('checkbox', { name: 'Auto Confirm User?' })).toBeChecked()
 
-  // Set up API waiters BEFORE clicking the button to avoid race conditions
+  // Set up API waiters BEFORE clicking the button to avoid race conditions.
+  //
+  // The pg-meta matcher MUST pin to `users-infinite` rather than the generic
+  // `query?key=`. Studio fires two pg-meta queries after create/delete:
+  // `users-count` (for the header badge) and `users-infinite` (for the table
+  // body). `useUsersInfiniteQuery` keys off `['projects', ref, 'users-infinite', …]`
+  // which execute-sql joins with `-`, so the URL contains `query?key=projects-${ref}-users-infinite`.
+  // The generic matcher grabs whichever lands first (usually `users-count`)
+  // and the test asserts visibility before the table itself has rerendered.
   const createUserPromise = waitForApiResponse(page, 'platform/auth', ref, 'users', {
     method: 'POST',
   })
-  const usersListPromise = waitForApiResponse(page, 'platform/pg-meta', ref, 'query?key=')
+  const usersListPromise = waitForApiResponse(
+    page,
+    'platform/pg-meta',
+    ref,
+    'query?key=users-infinite'
+  )
 
   // Click "Create user"
   await page.getByRole('button', { name: 'Create user' }).click()
@@ -55,11 +69,18 @@ export const deleteUserViaUI = async (page: Page, ref: string, email: string) =>
   // Wait for confirmation dialog
   await expect(page.getByRole('dialog', { name: 'Confirm to delete 1 user' })).toBeVisible()
 
-  // Set up API waiters BEFORE clicking the delete button
+  // Set up API waiters BEFORE clicking the delete button.
+  // See `createUserViaUI` above for why the pg-meta matcher pins to
+  // `users-infinite` rather than the generic `query?key=`.
   const deleteUserPromise = waitForApiResponse(page, 'platform/auth', ref, 'users/', {
     method: 'DELETE',
   })
-  const usersListPromise = waitForApiResponse(page, 'platform/pg-meta', ref, 'query?key=')
+  const usersListPromise = waitForApiResponse(
+    page,
+    'platform/pg-meta',
+    ref,
+    'query?key=users-infinite'
+  )
 
   // Confirm deletion
   await page.getByRole('button', { name: 'Delete' }).click()

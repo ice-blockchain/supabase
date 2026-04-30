@@ -1,0 +1,52 @@
+# Platform mode: enables IS_PLATFORM in Studio for the hosted platform UI
+#
+# Usage (from docker/ directory):
+#   docker compose -f docker-compose.yml -f docker-compose.platform.yml up -d
+#
+# The pre-built image runs Next.js in dev mode, so NEXT_PUBLIC_* environment
+# variables are evaluated at runtime — no rebuild required.
+
+services:
+  studio:
+    # Raise Studio's container memory ceiling (override with STUDIO_MEM_LIMIT, e.g. 12g).
+    mem_limit: ${STUDIO_MEM_LIMIT:-8g}
+    healthcheck:
+      disable: true
+    volumes:
+      - ../apps/studio/lib/api/incident-banner.ts:/app/apps/studio/lib/api/incident-banner.ts:ro
+      - ../apps/studio/proxy.ts:/app/apps/studio/proxy.ts:ro
+      - ../apps/studio/lib/api/self-hosted/util.ts:/app/apps/studio/lib/api/self-hosted/util.ts:ro
+      - ../traffic-one/studio-patches/gotrue.ts:/app/packages/common/gotrue.ts:ro
+      - ../traffic-one/studio-patches/apiHelpers.ts:/app/apps/studio/lib/api/apiHelpers.ts:ro
+      - ../traffic-one/studio-patches/.env.local:/app/apps/studio/.env.local:ro
+    environment:
+      # Bind Next.js listener to both IPv4 and IPv6 interfaces (prebuilt image runs next dev)
+      HOSTNAME: "::"
+      STUDIO_PORT: 3000
+      NEXT_PUBLIC_IS_PLATFORM: "true"
+      NEXT_PUBLIC_SELF_HOSTED_PLATFORM: "true"
+      NEXT_PUBLIC_API_URL: ${SUPABASE_PUBLIC_URL}/api
+      NEXT_PUBLIC_GOTRUE_URL: ${SUPABASE_PUBLIC_URL}/auth/v1
+      NEXT_PUBLIC_SUPABASE_URL: ${SUPABASE_PUBLIC_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY}
+      NEXT_PUBLIC_HCAPTCHA_SITE_KEY: "10000000-ffff-ffff-ffff-000000000001"
+      NEXT_PUBLIC_SITE_URL: ${SUPABASE_PUBLIC_URL}
+      PLATFORM_PG_META_URL: http://meta:8080
+      GOTRUE_INTERNAL_URL: http://kong:8000/auth/v1
+
+  functions:
+    environment:
+      # traffic-one edge function: restricted DB role, Logflare usage queries, pooler + postgres metadata
+      TRAFFIC_DB_URL: postgresql://traffic_api:${TRAFFIC_API_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      LOGFLARE_URL: http://analytics:4000
+      LOGFLARE_PRIVATE_ACCESS_TOKEN: ${LOGFLARE_PRIVATE_ACCESS_TOKEN}
+      POOLER_TENANT_ID: ${POOLER_TENANT_ID}
+      POOLER_DEFAULT_POOL_SIZE: ${POOLER_DEFAULT_POOL_SIZE}
+      POOLER_MAX_CLIENT_CONN: ${POOLER_MAX_CLIENT_CONN}
+      POOLER_PROXY_PORT_TRANSACTION: ${POOLER_PROXY_PORT_TRANSACTION}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+
+  kong:
+    depends_on:
+      studio:
+        condition: service_started

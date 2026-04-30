@@ -29,6 +29,18 @@ services:
     environment:
       - GOTRUE_SMTP_USER=
       - GOTRUE_SMTP_PASS=
+      # Dev-only rate-limit bump. The default GoTrue budget (`EMAIL_SENT=30/hr`,
+      # etc.) is enough for a human sitting in the Studio UI, but it trips 429s
+      # when the `traffic-one` integration suites or the Playwright
+      # auth-users multi-user flow create several users back-to-back. Production
+      # `docker/docker-compose.yml` is untouched, so real deployments keep the
+      # stock GoTrue defaults.
+      - GOTRUE_RATE_LIMIT_EMAIL_SENT=10000
+      - GOTRUE_RATE_LIMIT_SMS_SENT=10000
+      - GOTRUE_RATE_LIMIT_VERIFY=10000
+      - GOTRUE_RATE_LIMIT_TOKEN_REFRESH=10000
+      - GOTRUE_RATE_LIMIT_OTP=10000
+      - GOTRUE_RATE_LIMIT_ANONYMOUS_USERS=10000
   meta:
     ports:
       - 5555:8080

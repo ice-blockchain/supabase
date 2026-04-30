@@ -1,0 +1,12 @@
+## Platform Profile API -> Edge Function
+## Add this block in docker/volumes/api/kong.yml BEFORE the dashboard catch-all service
+- name: platform-profile
+  _comment: 'traffic-one: /api/platform/profile* -> http://functions:9000/traffic-one/*'
+  url: http://functions:9000/traffic-one
+  routes:
+    - name: platform-profile-all
+      strip_path: true
+      paths:
+        - /api/platform/profile
+  plugins:
+    - name: cors

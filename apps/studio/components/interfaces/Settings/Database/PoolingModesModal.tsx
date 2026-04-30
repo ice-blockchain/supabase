@@ -29,7 +29,9 @@ export const PoolingModesModal = () => {
   const state = useDatabaseSelectorStateSnapshot()
 
   const { data } = useSupavisorConfigurationQuery({ projectRef: projectRef })
-  const primaryConfig = data?.find((x) => x.identifier === state.selectedDatabaseId)
+  const primaryConfig = Array.isArray(data)
+    ? data.find((x) => x.identifier === state.selectedDatabaseId)
+    : undefined
 
   const navigateToPoolerSettings = () => {
     const el = document.getElementById('connection-pooler')

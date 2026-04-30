@@ -77,9 +77,8 @@ const UtilityPanel = ({
     onMutate: async (newContentSnippet) => {
       const { payload } = newContentSnippet
 
-      // No need to update the cache for non-SQL content
-      if (payload.type !== 'sql') return
-      if (!('chart' in payload.content)) return
+      if (!payload || payload.type !== 'sql') return
+      if (!payload.content || !('chart' in payload.content)) return
 
       const newSnippet = {
         ...snippet,
@@ -153,7 +152,7 @@ const UtilityPanel = ({
             <DownloadResultsButton
               type="text"
               results={result.rows as any[]}
-              fileName={`Supabase Snippet ${snippet.name}`}
+              fileName={`Supabase Snippet ${snippet?.name ?? 'Untitled'}`}
               onDownloadAsCSV={() =>
                 sendEvent({
                   action: 'sql_editor_result_download_csv_clicked',
